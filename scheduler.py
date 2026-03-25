@@ -127,6 +127,8 @@ class ReminderScheduler:
 def _fire_reminder(task_id: str) -> None:
     """APScheduler job callback. MUST complete in < 5ms. enqueue() only."""
     enqueue("show_reminder", task_id=task_id)
+    from app import request_badge_update  # noqa: PLC0415
+    request_badge_update(True)
 
 
 def _compute_next_cron_fire(task: dict) -> datetime | None:

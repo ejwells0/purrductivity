@@ -15,6 +15,7 @@ import multiprocessing as mp
 
 import ui.tk_host as tk_host
 from ui.tk_process import run_tk
+from store import TaskStore
 from scheduler import ReminderScheduler
 from app import PurrductivityApp
 
@@ -25,10 +26,12 @@ if __name__ == "__main__":
     cmd_queue = mp.Queue()
     tk_host.init(cmd_queue)
 
+    store = TaskStore()
+
     tk_proc = mp.Process(target=run_tk, args=(cmd_queue,), daemon=True)
     tk_proc.start()
 
-    scheduler = ReminderScheduler()
+    scheduler = ReminderScheduler(store)
     scheduler.start()
 
-    PurrductivityApp().run()
+    PurrductivityApp(scheduler, store).run()
