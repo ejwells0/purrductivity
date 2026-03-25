@@ -1,12 +1,11 @@
 """SHELL-03: Closing the panel hides it (withdraw) rather than destroying it."""
 import pytest
 
+
 # panel.py exists but requires a running macOS display + tkinter event loop;
 # running it in a pytest session causes the process to hang.
 # Test is skipped here and verified manually / in Plan 02 integration testing.
-pytestmark = pytest.mark.skip(reason="ui/panel.py requires macOS display event loop (hangs in pytest)")
-
-
+@pytest.mark.skip(reason="ui/panel.py requires macOS display event loop (hangs in pytest)")
 def test_panel_survives_close():
     """After WM_DELETE_WINDOW fires, panel widget still exists (winfo_exists() is True)."""
     from ui.tk_host import start_tk_thread, enqueue, _root  # noqa: PLC0415
