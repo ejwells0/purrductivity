@@ -7,8 +7,8 @@
 #   the child process can own the main thread for tkinter with no conflict.
 #
 # IN THE MAIN PROCESS:
-#   - init(queue)   stores the mp.Queue for sending commands to the child
-#   - enqueue(fn)   sends "show" to the child (fn arg kept for API compat)
+#   - init(queue)        stores the mp.Queue for sending commands to the child
+#   - enqueue(cmd, ...)  sends a structured command dict to the child process
 #
 # IN THE CHILD PROCESS (ui/tk_process.py):
 #   - _root is set by tk_process.run_tk() before any panel calls
@@ -32,7 +32,16 @@ def get_root() -> "ctk.CTk":
     return _root
 
 
-def enqueue(fn, **kwargs) -> None:
-    """Send 'show' to the tkinter child process. Thread-safe from any thread."""
+def enqueue(cmd: str, **kwargs) -> None:
+    """Send a command dict to the tkinter child process. Thread-safe.
+
+    Usage:
+        enqueue("show")
+        enqueue("show_reminder", task_id="abc-123")
+        enqueue("done", task_id="abc-123")
+        enqueue("snooze", task_id="abc-123", minutes=15)
+        enqueue("badge", state="pending")
+        enqueue("badge", state="idle")
+    """
     if _cmd_queue is not None:
-        _cmd_queue.put("show")
+        _cmd_queue.put({"cmd": cmd, **kwargs})

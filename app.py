@@ -6,7 +6,6 @@
 import rumps
 
 from ui.tk_host import enqueue
-from ui.panel import open_panel
 
 
 class PurrductivityApp(rumps.App):
@@ -22,4 +21,4 @@ class PurrductivityApp(rumps.App):
 
     @rumps.clicked("Open")
     def open_panel_clicked(self, _sender):
-        enqueue(open_panel)
+        enqueue("show")
