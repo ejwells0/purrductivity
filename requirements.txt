@@ -3,3 +3,5 @@ customtkinter==5.2.2
 Pillow==12.1.1
 pytest==8.3.5
 pyobjc-framework-Cocoa==11.0
+tinydb==4.8.2
+apscheduler==3.11.2
