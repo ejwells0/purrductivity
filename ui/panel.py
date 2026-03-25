@@ -7,7 +7,7 @@
 import customtkinter as ctk
 from AppKit import NSScreen
 
-from ui.styles import LAVENDER_BG, CREAM_TEXT, BORDER_COLOR
+from ui.styles import LAVENDER_BG, CREAM_TEXT, BORDER_COLOR, BUTTON_HOVER
 # BODY_FONT and TITLE_FONT are imported inside open_panel() to defer font
 # creation until the tkinter root exists (they use module __getattr__ which
 # calls CTkFont() — requires a live tk root).
@@ -16,6 +16,12 @@ PANEL_WIDTH  = 360
 PANEL_HEIGHT = 500
 
 _panel: ctk.CTkToplevel | None = None
+
+
+def _hide_panel() -> None:
+    """Hide the panel without destroying it."""
+    if _panel is not None:
+        _panel.withdraw()
 
 
 def open_panel() -> None:
@@ -51,16 +57,16 @@ def open_panel() -> None:
 
     # Stay on top; survive Cmd+W and macOS window gestures (SHELL-03)
     _panel.attributes("-topmost", True)
-    # WM_DELETE_WINDOW: hide instead of destroy — one root, never recreated (Pitfall 2)
-    _panel.protocol("WM_DELETE_WINDOW", _panel.withdraw)
+    # WM_DELETE_WINDOW + Cmd+W: hide instead of destroy — one root, never recreated
+    _panel.protocol("WM_DELETE_WINDOW", _hide_panel)
+    _panel.bind("<Command-w>", lambda _e: _hide_panel())
 
     # ── Placeholder content ───────────────────────────────────────────────────
-    # Fonts are imported here (after tk root exists) to avoid RuntimeError at module import
     from ui.styles import TITLE_FONT, BODY_FONT  # noqa: PLC0415
 
     header = ctk.CTkLabel(
         _panel,
-        text="Purrductivity 🐱",
+        text="Purrductivity",
         font=TITLE_FONT,
         text_color=CREAM_TEXT,
         fg_color="transparent",
@@ -80,10 +86,10 @@ def open_panel() -> None:
         _panel,
         text="Close",
         fg_color=BORDER_COLOR,
-        hover_color="#B89DD0",
+        hover_color=BUTTON_HOVER,
         text_color=CREAM_TEXT,
         corner_radius=8,
-        command=_panel.withdraw,
+        command=_hide_panel,
     )
     close_btn.pack(pady=20)
 

@@ -8,6 +8,7 @@ LAVENDER_BG   = "#E8D5F5"   # Soft lavender — main background
 PEACH_ACCENT  = "#FFD4B8"   # Warm peach — accent / highlight
 CREAM_TEXT    = "#5C4A6B"   # Deep muted purple — readable on lavender
 BORDER_COLOR  = "#C9A8E0"   # Slightly deeper lavender — borders
+BUTTON_HOVER  = "#B89DD0"   # Hovered button — slightly deeper purple
 WHITE_CARD    = "#FFF8F2"   # Near-cream white — card backgrounds
 
 # ── Fonts ─────────────────────────────────────────────────────────────────────

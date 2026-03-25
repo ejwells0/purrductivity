@@ -8,4 +8,4 @@ def test_app_init():
     """PurrductivityApp can be instantiated; title is set; no exception raised."""
     from app import PurrductivityApp  # noqa: PLC0415
     instance = PurrductivityApp()
-    assert instance.title == "🐱"
+    assert instance.title == "P"

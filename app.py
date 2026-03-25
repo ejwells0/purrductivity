@@ -13,7 +13,7 @@ class PurrductivityApp(rumps.App):
     def __init__(self):
         super().__init__(
             name="Purrductivity",
-            title="🐱",          # Emoji in menu bar; works without a PNG asset
+            title="P",
             icon=None,
             quit_button="Quit Purrductivity",
         )
