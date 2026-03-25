@@ -134,8 +134,11 @@ def _next_fire_label(task: dict) -> tuple[str, str]:
         return f"Next: {dow_name}", DARK_TEXT
     elif t == "daily":
         return f"Daily at {time_str}", DARK_TEXT
-    elif t in ("weekly", "quarterly"):
-        return f"Checks in daily at {time_str}", DARK_TEXT
+    elif t == "weekly":
+        return f"Weekly at {time_str}", DARK_TEXT
+    elif t == "quarterly":
+        due = task.get("due_quarter", "")
+        return f"Due {due}" if due else "Quarterly", DARK_TEXT
     return "", DARK_TEXT
 
 
@@ -228,20 +231,23 @@ def _show_list_view(parent: ctk.CTkFrame) -> None:
                     anchor="w",
                 ).pack(fill="x")
 
-            # Right column: type badge
+            # Right column: type badge (CTkFrame wrapper for border support)
             border_c, text_c = _badge_colors(task.get("type", ""))
-            badge = ctk.CTkLabel(
+            badge_frame = ctk.CTkFrame(
                 row,
+                fg_color=SAGE_CARD,
+                border_width=1,
+                border_color=border_c,
+                corner_radius=4,
+            )
+            badge_frame.grid(row=0, column=1, sticky="e", padx=(4, 10), pady=6)
+            ctk.CTkLabel(
+                badge_frame,
                 text=_badge_label(task.get("type", "")),
                 font=SMALL_FONT,
                 text_color=text_c,
-                fg_color=SAGE_CARD,
-                corner_radius=4,
-                padx=6,
-                pady=2,
-            )
-            badge.grid(row=0, column=1, sticky="e", padx=(4, 10), pady=6)
-            badge.configure(border_width=1, border_color=border_c)
+                fg_color="transparent",
+            ).pack(padx=6, pady=2)
 
     # ── Add Task button (always shown) ────────────────────────────────
     ctk.CTkButton(
