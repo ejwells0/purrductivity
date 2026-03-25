@@ -14,7 +14,9 @@ PANEL_WIDTH  = 340
 PANEL_HEIGHT = 460
 
 _CATS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "cats")
-_CAT_COUNT = 15
+_CAT_FILES = sorted(
+    f for f in os.listdir(_CATS_DIR) if f.lower().endswith(".png")
+)
 
 _panel: ctk.CTkToplevel | None = None
 
@@ -27,8 +29,7 @@ def _hide_panel() -> None:
 
 def _load_cat_image(size: int = 160) -> ctk.CTkImage:
     """Pick a random cat and return a CTkImage scaled to size×size."""
-    idx = random.randint(1, _CAT_COUNT)
-    path = os.path.join(_CATS_DIR, f"cat_{idx:02d}.png")
+    path = os.path.join(_CATS_DIR, random.choice(_CAT_FILES))
     img = Image.open(path).convert("RGBA")
     return ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
 
