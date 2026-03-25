@@ -15,6 +15,10 @@ CAT_CREAM     = "#F5EFE0"   # Cat face fill
 CAT_PINK      = "#F0C0C8"   # Inner ears, blush, nose
 CAT_OUTLINE   = "#C4A882"   # Cat linework / whiskers
 
+# Menu bar and action palette
+BADGE_DOT     = "#E8748A"   # Pending-reminder dot on menu bar icon (TONE-04)
+DESTRUCTIVE   = "#C0392B"   # Phase 3 delete/remove actions — defined now, unused in Phase 2
+
 # ── Fonts ─────────────────────────────────────────────────────────────────────
 _TITLE_FONT = None
 _BODY_FONT = None
