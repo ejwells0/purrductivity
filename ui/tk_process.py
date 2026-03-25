@@ -5,10 +5,11 @@ import customtkinter as ctk
 import ui.tk_host as _host
 
 
-def run_tk(cmd_queue) -> None:
+def run_tk(cmd_queue, resp_queue) -> None:
     """
     Entry point for the tkinter subprocess.
-    cmd_queue is a multiprocessing.Queue; main process puts "show" into it.
+    cmd_queue is a multiprocessing.Queue; main process puts commands into it.
+    resp_queue is a multiprocessing.Queue; child process puts responses into it.
     """
     ctk.set_appearance_mode("light")
     ctk.set_default_color_theme("blue")
@@ -18,6 +19,8 @@ def run_tk(cmd_queue) -> None:
 
     # Store root so panel.py can access it via get_root()
     _host._root = root
+    # Wire resp_queue so send_to_main() works in the child process
+    _host.init_resp(resp_queue)
 
     def _poll() -> None:
         try:
@@ -44,6 +47,9 @@ def run_tk(cmd_queue) -> None:
                     handle_snooze(kwargs["task_id"], kwargs["minutes"])
                 elif cmd == "badge":
                     pass  # Plan 04 wires badge into app.py main process; child ignores
+                elif cmd == "schedule_snooze":
+                    from ui.tk_host import send_to_main  # noqa: PLC0415
+                    send_to_main("schedule_snooze", task_id=kwargs["task_id"], minutes=kwargs["minutes"])
                 else:
                     import logging  # noqa: PLC0415
                     logging.getLogger(__name__).warning("Unknown IPC command: %r", cmd)

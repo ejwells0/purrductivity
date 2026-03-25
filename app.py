@@ -40,7 +40,7 @@ def request_badge_update(pending: bool) -> None:
 
 
 class PurrductivityApp(rumps.App):
-    def __init__(self, scheduler, store):
+    def __init__(self, scheduler, store, resp_queue):
         super().__init__(
             name="Purrductivity",
             title="",
@@ -50,6 +50,7 @@ class PurrductivityApp(rumps.App):
         )
         self._scheduler = scheduler
         self._store = store
+        self._resp_queue = resp_queue
         self._badge_pending = False
         self.menu = ["Open", None]
         # Poll badge state every 500ms on main thread
@@ -60,6 +61,17 @@ class PurrductivityApp(rumps.App):
     def open_panel_clicked(self, _sender):
         enqueue("show")
 
+    def _drain_resp_queue(self) -> None:
+        """Drain commands from the child process. Called every 500ms from _apply_badge."""
+        try:
+            while True:
+                msg = self._resp_queue.get_nowait()
+                cmd = msg.get("cmd", "")
+                if cmd == "schedule_snooze":
+                    self._scheduler.schedule_snooze(msg["task_id"], msg["minutes"])
+        except Exception:
+            pass  # Empty queue raises queue.Empty — swallow it
+
     def _apply_badge(self, _sender) -> None:
         """Main-thread timer: apply any pending badge state change.
 
@@ -68,6 +80,7 @@ class PurrductivityApp(rumps.App):
         has cleared snooze via Done — once snoozed_until is None in the DB, the badge
         turns off without needing a round-trip IPC message.
         """
+        self._drain_resp_queue()
         any_snoozed = any(
             t.get("snoozed_until") for t in self._store.get_active_tasks()
         )
