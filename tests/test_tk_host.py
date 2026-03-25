@@ -2,12 +2,11 @@
 import pytest
 import queue
 
+
 # tk_host.py exists but start_tk_thread() starts a macOS tkinter mainloop;
 # running it in a pytest session causes the process to hang.
 # Test is skipped here and verified manually / in Plan 02 integration testing.
-pytestmark = pytest.mark.skip(reason="start_tk_thread() hangs in pytest (needs macOS display event loop)")
-
-
+@pytest.mark.skip(reason="start_tk_thread() hangs in pytest (needs macOS display event loop)")
 def test_tk_thread_is_daemon():
     """start_tk_thread() starts a daemon thread (won't prevent interpreter exit)."""
     import threading
