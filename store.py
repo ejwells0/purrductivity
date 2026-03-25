@@ -31,6 +31,7 @@ class TaskStore:
             "id": task_id,
             "notes": "",
             "completed_count": 0,
+            "progress": 0,
             "snoozed_until": None,
             "last_done": None,
             "paused": False,

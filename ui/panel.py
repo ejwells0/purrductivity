@@ -430,18 +430,22 @@ def _save_task(parent: ctk.CTkFrame, fields: dict, type_var: ctk.StringVar,
         _show_error(error_frame, "This field is required.")
         return
 
-    start_date_val = fields.get("start_date", None)
-    start_date_str = start_date_val.get().strip() if start_date_val else ""
-    if not start_date_str:
+    # start_date is now stored as a string constant (not a widget)
+    start_date_raw = fields.get("start_date", None)
+    if isinstance(start_date_raw, str):
+        start_date_str = start_date_raw
+    elif start_date_raw is not None:
+        start_date_str = start_date_raw.get().strip() or datetime.now().date().isoformat()
+    else:
         start_date_str = datetime.now().date().isoformat()
 
     notes_entry = fields.get("notes", None)
     notes_val = notes_entry.get().strip() if notes_entry else ""
 
-    # Parse time (shared by all types that have it)
+    # Parse time (shared by Scheduled, Daily, Weekly — quarterly has no time field)
     hour, minute = 9, 0
     if "time" in fields:
-        time_str = fields["time"].get().strip()
+        time_str = fields["time"].get()  # StringVar from CTkOptionMenu
         parsed = _parse_time(time_str) if time_str else None
         if parsed is None and time_str:
             _show_error(error_frame, "Enter a valid time (e.g. 9:00 AM).")
@@ -453,7 +457,7 @@ def _save_task(parent: ctk.CTkFrame, fields: dict, type_var: ctk.StringVar,
 
     if task_type == "Scheduled":
         dow_val = fields.get("day_of_week", None)
-        dow_str = dow_val.get().strip() if dow_val else ""
+        dow_str = dow_val.get() if dow_val else ""  # StringVar from CTkOptionMenu
         dow = _parse_dow(dow_str)
         if dow is None:
             _show_error(error_frame, "Enter a valid day (e.g. Mon, Tue, Wed).")
@@ -479,8 +483,8 @@ def _save_task(parent: ctk.CTkFrame, fields: dict, type_var: ctk.StringVar,
         )
 
     elif task_type == "Weekly":
-        weekly_entry = fields.get("weekly_target", None)
-        weekly_str = weekly_entry.get().strip() if weekly_entry else ""
+        weekly_var = fields.get("weekly_target", None)
+        weekly_str = weekly_var.get() if weekly_var else "1"  # StringVar, default "1"
         try:
             weekly_target = int(weekly_str)
         except (ValueError, TypeError):
@@ -497,19 +501,22 @@ def _save_task(parent: ctk.CTkFrame, fields: dict, type_var: ctk.StringVar,
         )
 
     elif task_type == "Quarterly":
-        total_entry = fields.get("total_target", None)
-        total_str = total_entry.get().strip() if total_entry else ""
-        try:
-            total_target = int(total_str)
-        except (ValueError, TypeError):
-            _show_error(error_frame, "Enter a whole number for total target.")
-            return
+        due_quarter_var = fields.get("due_quarter")
+        due_quarter = due_quarter_var.get() if due_quarter_var else "Q1 2026"
+        check_in_var = fields.get("check_in_enabled")
+        check_in_enabled = check_in_var.get() if check_in_var else False
+        check_in_day_var = fields.get("check_in_day")
+        check_in_day_str = check_in_day_var.get() if check_in_day_var else "Mon"
+        check_in_dow = _parse_dow(check_in_day_str) if check_in_enabled else None
         store.add_task(
             type="quarterly",
             name=name_val,
-            total_target=total_target,
-            hour=hour,
-            minute=minute,
+            due_quarter=due_quarter,
+            progress=0,
+            check_in_enabled=check_in_enabled,
+            check_in_dow=check_in_dow,
+            hour=9,     # check-in fires at 9 AM by default
+            minute=0,
             start_date=start_date_str,
             notes=notes_val,
         )
