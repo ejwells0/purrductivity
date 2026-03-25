@@ -2,9 +2,6 @@
 import pytest
 import re
 
-# styles.py does not exist yet — test will xfail until Plan 02 creates it
-pytestmark = pytest.mark.xfail(reason="ui/styles.py not yet created (Plan 02)", strict=False)
-
 HEX_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
