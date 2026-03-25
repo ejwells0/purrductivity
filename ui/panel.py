@@ -65,6 +65,37 @@ def _load_cat_image(size: int = 160) -> ctk.CTkImage:
 _DOW_ABBR = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 _DOW_NAME = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
 
+# Half-hour time slots for dropdown (6:00 AM to 11:30 PM)
+_TIME_SLOTS = [
+    "6:00 AM", "6:30 AM", "7:00 AM", "7:30 AM",
+    "8:00 AM", "8:30 AM", "9:00 AM", "9:30 AM",
+    "10:00 AM", "10:30 AM", "11:00 AM", "11:30 AM",
+    "12:00 PM", "12:30 PM", "1:00 PM", "1:30 PM",
+    "2:00 PM", "2:30 PM", "3:00 PM", "3:30 PM",
+    "4:00 PM", "4:30 PM", "5:00 PM", "5:30 PM",
+    "6:00 PM", "6:30 PM", "7:00 PM", "7:30 PM",
+    "8:00 PM", "8:30 PM", "9:00 PM", "9:30 PM",
+    "10:00 PM", "10:30 PM", "11:00 PM", "11:30 PM",
+]
+
+_DOW_OPTIONS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _quarter_options(n: int = 8) -> list:
+    """Return next n quarter labels starting from current quarter, e.g. ['Q2 2026', ...]."""
+    from datetime import date  # noqa: PLC0415
+    today = date.today()
+    q = (today.month - 1) // 3 + 1
+    year = today.year
+    result = []
+    for _ in range(n):
+        result.append(f"Q{q} {year}")
+        q += 1
+        if q > 4:
+            q = 1
+            year += 1
+    return result
+
 
 def _parse_dow(val: str) -> int | None:
     """Parse "Mon"/"Tue"/... to 0-6. Returns None on failure."""
@@ -227,56 +258,144 @@ def _show_list_view(parent: ctk.CTkFrame) -> None:
 # ── Form View ─────────────────────────────────────────────────────────────────
 
 def _render_fields(field_frame: ctk.CTkFrame, task_type: str) -> dict:
-    """Populate field_frame with entry widgets for task_type.
+    """Populate field_frame with widgets for task_type.
 
-    Returns dict mapping field name → CTkEntry widget.
+    Returns dict mapping field name → widget (CTkEntry, StringVar, BooleanVar, or str).
     All prior children of field_frame are destroyed before rendering.
     """
     from ui.styles import BODY_FONT, SMALL_FONT  # noqa: PLC0415
+    from datetime import date  # noqa: PLC0415
 
     for widget in field_frame.winfo_children():
         widget.destroy()
 
-    fields: dict[str, ctk.CTkEntry] = {}
+    fields: dict = {}
+    today_str = date.today().isoformat()
+
+    def _label(text: str) -> None:
+        ctk.CTkLabel(
+            field_frame, text=text, font=SMALL_FONT, text_color=DARK_TEXT,
+            fg_color="transparent", anchor="w",
+        ).pack(fill="x", padx=0, pady=(6, 1))
 
     def _add_entry(label_text: str, key: str, placeholder: str = "") -> ctk.CTkEntry:
-        ctk.CTkLabel(
-            field_frame,
-            text=label_text,
-            font=SMALL_FONT,
-            text_color=DARK_TEXT,
-            fg_color="transparent",
-            anchor="w",
-        ).pack(fill="x", padx=0, pady=(6, 1))
+        _label(label_text)
         entry = ctk.CTkEntry(
-            field_frame,
-            fg_color=SAGE_CARD,
-            border_color=BORDER_COLOR,
-            text_color=DARK_TEXT,
-            font=BODY_FONT,
-            placeholder_text=placeholder,
+            field_frame, fg_color=SAGE_CARD, border_color=BORDER_COLOR,
+            text_color=DARK_TEXT, font=BODY_FONT, placeholder_text=placeholder,
         )
         entry.pack(fill="x", padx=0, pady=(0, 2))
         fields[key] = entry
         return entry
 
-    # Fields shared by all types
+    def _add_option_menu(label_text: str, key: str, values: list, default: str) -> ctk.CTkOptionMenu:
+        _label(label_text)
+        var = ctk.StringVar(value=default)
+        menu = ctk.CTkOptionMenu(
+            field_frame, values=values, variable=var,
+            fg_color=SAGE_CARD, button_color=SAGE_BUTTON,
+            button_hover_color=BUTTON_HOVER, text_color=DARK_TEXT,
+            font=BODY_FONT,
+        )
+        menu.pack(fill="x", padx=0, pady=(0, 2))
+        fields[key] = var   # store StringVar so _save_task calls .get()
+        return menu
+
+    # ── Task name (always present, CTkEntry) ─────────────────────────────
     _add_entry("Task name", "name")
-    _add_entry("Start date", "start_date", "YYYY-MM-DD")
 
-    # Type-specific fields
+    # ── Start date: non-editable label pre-filled with today ─────────────
+    _label("Start date")
+    ctk.CTkLabel(
+        field_frame, text=today_str, font=BODY_FONT, text_color=DARK_TEXT,
+        fg_color=SAGE_CARD, anchor="w", corner_radius=6,
+    ).pack(fill="x", padx=0, pady=(0, 2), ipady=6)
+    fields["start_date"] = today_str   # store as string constant, not widget
+
+    # ── Type-specific fields ─────────────────────────────────────────────
     if task_type == "Scheduled":
-        _add_entry("Day of week", "day_of_week", "Mon/Tue/Wed/Thu/Fri/Sat/Sun")
-        _add_entry("Reminder time", "time", "9:00 AM")
-    elif task_type == "Daily":
-        _add_entry("Reminder time", "time", "9:00 AM")
-    elif task_type == "Weekly":
-        _add_entry("Weekly target", "weekly_target", "e.g. 5")
-        _add_entry("Reminder time", "time", "9:00 AM")
-    elif task_type == "Quarterly":
-        _add_entry("Total target", "total_target", "e.g. 52")
-        _add_entry("Reminder time", "time", "9:00 AM")
+        _add_option_menu("Day of week", "day_of_week", _DOW_OPTIONS, "Mon")
+        _add_option_menu("Reminder time", "time", _TIME_SLOTS, "9:00 AM")
 
+    elif task_type == "Daily":
+        _add_option_menu("Reminder time", "time", _TIME_SLOTS, "9:00 AM")
+
+    elif task_type == "Weekly":
+        _add_option_menu("Reminder time", "time", _TIME_SLOTS, "9:00 AM")
+        # Optional weekly target toggle
+        _label("Set weekly target?")
+        toggle_var = ctk.BooleanVar(value=False)
+        target_var = ctk.StringVar(value="1")
+        target_menu_holder: list = []   # mutable container for the CTkOptionMenu ref
+
+        def _on_toggle_change() -> None:
+            if toggle_var.get():
+                if not target_menu_holder:
+                    m = ctk.CTkOptionMenu(
+                        field_frame,
+                        values=[str(i) for i in range(1, 11)],
+                        variable=target_var,
+                        fg_color=SAGE_CARD, button_color=SAGE_BUTTON,
+                        button_hover_color=BUTTON_HOVER, text_color=DARK_TEXT,
+                        font=BODY_FONT,
+                    )
+                    m.pack(fill="x", padx=0, pady=(0, 2))
+                    target_menu_holder.append(m)
+            else:
+                for m in target_menu_holder:
+                    m.destroy()
+                target_menu_holder.clear()
+                target_var.set("1")
+
+        ctk.CTkCheckBox(
+            field_frame, text="", variable=toggle_var,
+            fg_color=SAGE_BUTTON, hover_color=BUTTON_HOVER,
+            checkmark_color=DARK_TEXT, border_color=BORDER_COLOR,
+            command=_on_toggle_change,
+        ).pack(anchor="w", padx=0, pady=(0, 2))
+        fields["weekly_target"] = target_var   # always valid: "1" if toggle OFF
+
+    elif task_type == "Quarterly":
+        _add_option_menu("Due date", "due_quarter", _quarter_options(), _quarter_options()[0])
+        # Opt-in weekly check-in
+        _label("Weekly check-in?")
+        checkin_var = ctk.BooleanVar(value=False)
+        checkin_day_var = ctk.StringVar(value="Mon")
+        checkin_menu_holder: list = []
+
+        def _on_checkin_change() -> None:
+            if checkin_var.get():
+                if not checkin_menu_holder:
+                    lbl2 = ctk.CTkLabel(
+                        field_frame, text="Check-in day", font=SMALL_FONT,
+                        text_color=DARK_TEXT, fg_color="transparent", anchor="w",
+                    )
+                    lbl2.pack(fill="x", padx=0, pady=(6, 1))
+                    m = ctk.CTkOptionMenu(
+                        field_frame,
+                        values=_DOW_OPTIONS,
+                        variable=checkin_day_var,
+                        fg_color=SAGE_CARD, button_color=SAGE_BUTTON,
+                        button_hover_color=BUTTON_HOVER, text_color=DARK_TEXT,
+                        font=BODY_FONT,
+                    )
+                    m.pack(fill="x", padx=0, pady=(0, 2))
+                    checkin_menu_holder.extend([lbl2, m])
+            else:
+                for w in checkin_menu_holder:
+                    w.destroy()
+                checkin_menu_holder.clear()
+
+        ctk.CTkCheckBox(
+            field_frame, text="", variable=checkin_var,
+            fg_color=SAGE_BUTTON, hover_color=BUTTON_HOVER,
+            checkmark_color=DARK_TEXT, border_color=BORDER_COLOR,
+            command=_on_checkin_change,
+        ).pack(anchor="w", padx=0, pady=(0, 2))
+        fields["check_in_enabled"] = checkin_var   # BooleanVar
+        fields["check_in_day"] = checkin_day_var    # StringVar
+
+    # ── Notes (always present) ────────────────────────────────────────────
     _add_entry("Notes (optional)", "notes", "")
 
     return fields
