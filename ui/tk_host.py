@@ -7,23 +7,32 @@
 #   the child process can own the main thread for tkinter with no conflict.
 #
 # IN THE MAIN PROCESS:
-#   - init(queue)        stores the mp.Queue for sending commands to the child
-#   - enqueue(cmd, ...)  sends a structured command dict to the child process
+#   - init(queue)          stores the mp.Queue for sending commands to the child
+#   - init_resp(queue)     stores the mp.Queue for receiving commands from the child
+#   - enqueue(cmd, ...)    sends a structured command dict to the child process
 #
 # IN THE CHILD PROCESS (ui/tk_process.py):
 #   - _root is set by tk_process.run_tk() before any panel calls
 #   - get_root() returns it for panel.py to use
+#   - send_to_main(cmd, ...) sends a command dict back to the main process
 
 import customtkinter as ctk
 
 _root: "ctk.CTk | None" = None
-_cmd_queue = None  # multiprocessing.Queue — set by main.py
+_cmd_queue = None   # main->child
+_resp_queue = None  # child->main
 
 
 def init(cmd_queue) -> None:
     """Store the IPC queue. Called in the main process before spawning child."""
     global _cmd_queue
     _cmd_queue = cmd_queue
+
+
+def init_resp(resp_queue) -> None:
+    """Store the response queue. Called by main.py (main process) and run_tk (child process)."""
+    global _resp_queue
+    _resp_queue = resp_queue
 
 
 def get_root() -> "ctk.CTk":
@@ -45,3 +54,9 @@ def enqueue(cmd: str, **kwargs) -> None:
     """
     if _cmd_queue is not None:
         _cmd_queue.put({"cmd": cmd, **kwargs})
+
+
+def send_to_main(cmd: str, **kwargs) -> None:
+    """Send a command from the child process to the main process. Thread-safe."""
+    if _resp_queue is not None:
+        _resp_queue.put({"cmd": cmd, **kwargs})
