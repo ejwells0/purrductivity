@@ -1,37 +1,38 @@
 # ui/tk_host.py
-# Persistent hidden CTk root with thread-safe UI scheduling.
+# Bridge between the main (rumps) process and the tkinter child process.
 #
-# ARCHITECTURE:
-#   - setup()          called on the main thread before spawning rumps thread
-#   - get_root()       returns the CTk root (main.py calls .mainloop() on it)
-#   - enqueue(fn)      thread-safe via root.after(0, ...) — safe from any thread
+# WHY MULTIPROCESSING:
+#   Both rumps (NSStatusBar) and tkinter (NSWindow) require the macOS main thread.
+#   They cannot coexist in one process. Each process has its own main thread, so
+#   the child process can own the main thread for tkinter with no conflict.
 #
-# WHY after(0) INSTEAD OF root.update():
-#   root.update() called from a rumps Timer causes GIL re-entrancy —
-#   Tcl fires Python callbacks (PythonCmd) while Python already holds the GIL,
-#   causing SIGABRT. after(0, ...) schedules work on the tkinter event loop
-#   without holding the GIL, which is safe from any thread.
+# IN THE MAIN PROCESS:
+#   - init(queue)   stores the mp.Queue for sending commands to the child
+#   - enqueue(fn)   sends "show" to the child (fn arg kept for API compat)
+#
+# IN THE CHILD PROCESS (ui/tk_process.py):
+#   - _root is set by tk_process.run_tk() before any panel calls
+#   - get_root() returns it for panel.py to use
+
 import customtkinter as ctk
 
-_root: ctk.CTk | None = None
+_root: "ctk.CTk | None" = None
+_cmd_queue = None  # multiprocessing.Queue — set by main.py
 
 
-def setup() -> None:
-    """Create the hidden CTk root on the main thread. MUST be called first."""
-    global _root
-    ctk.set_appearance_mode("light")
-    ctk.set_default_color_theme("blue")  # overridden by per-widget fg_color
-    _root = ctk.CTk()
-    _root.withdraw()  # Hidden root — never shown to user
+def init(cmd_queue) -> None:
+    """Store the IPC queue. Called in the main process before spawning child."""
+    global _cmd_queue
+    _cmd_queue = cmd_queue
 
 
-def get_root() -> ctk.CTk:
-    """Return the CTk root. main.py calls get_root().mainloop() to run the event loop."""
-    assert _root is not None, "setup() must be called before get_root()"
+def get_root() -> "ctk.CTk":
+    """Return the CTk root. Only valid inside the tkinter child process."""
+    assert _root is not None, "get_root() called before root was set by tk_process"
     return _root
 
 
 def enqueue(fn, **kwargs) -> None:
-    """Thread-safe: schedule UI work on the tkinter main thread from any thread."""
-    if _root is not None:
-        _root.after(0, lambda: fn(**kwargs))
+    """Send 'show' to the tkinter child process. Thread-safe from any thread."""
+    if _cmd_queue is not None:
+        _cmd_queue.put("show")

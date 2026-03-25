@@ -1,30 +1,34 @@
 # main.py
-# Entry point — tkinter mainloop owns the main thread; rumps runs in a thread.
+# Multiprocess entry point.
+#
+# ARCHITECTURE (required by macOS):
+#   - rumps (NSStatusBar) needs the main thread in the parent process
+#   - tkinter (NSWindow) needs the main thread in the child process
+#   - IPC via multiprocessing.Queue: main sends "show", child opens panel
 #
 # ORDER IS CRITICAL:
-#   1. setup()          — create hidden CTk root on the main thread (must be first)
-#   2. rumps thread     — starts rumps NSRunLoop + scheduler on a daemon thread
-#   3. mainloop()       — blocks main thread; tkinter handles all UI events cleanly
-#
-# WHY THIS LAYOUT:
-#   macOS requires NSWindow (tkinter) on the main thread, and tkinter's mainloop
-#   must own that thread for callbacks to fire without GIL re-entrancy issues.
-#   rumps works fine on a daemon thread (it only manages a status bar item/menu).
-import threading
-from ui.tk_host import setup, get_root
+#   1. mp.Queue created first
+#   2. tk_host.init(q) stores queue so app.py / scheduler.py can enqueue
+#   3. Child process spawned (gets its own main thread for tkinter)
+#   4. rumps runs on this process's main thread
+import multiprocessing as mp
+
+import ui.tk_host as tk_host
+from ui.tk_process import run_tk
 from scheduler import ReminderScheduler
 from app import PurrductivityApp
 
 
-def _run_rumps() -> None:
+if __name__ == "__main__":
+    mp.set_start_method("spawn", force=True)
+
+    cmd_queue = mp.Queue()
+    tk_host.init(cmd_queue)
+
+    tk_proc = mp.Process(target=run_tk, args=(cmd_queue,), daemon=True)
+    tk_proc.start()
+
     scheduler = ReminderScheduler()
     scheduler.start()
+
     PurrductivityApp().run()
-
-
-if __name__ == "__main__":
-    setup()  # CTk root on main thread — must precede everything
-
-    threading.Thread(target=_run_rumps, daemon=True).start()
-
-    get_root().mainloop()  # blocks; all tkinter events handled here
