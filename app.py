@@ -13,9 +13,10 @@ class PurrductivityApp(rumps.App):
     def __init__(self):
         super().__init__(
             name="Purrductivity",
-            title="P",
-            icon=None,
+            title="",
+            icon="assets/cat_icon.png",
             quit_button="Quit Purrductivity",
+            template=True,
         )
         self.menu = ["Open", None]   # None = menu separator
 

@@ -1,25 +1,23 @@
 # ui/tk_host.py
-# Persistent hidden CTk root + queue-based UI dispatch.
-# Source: Phase 1 Research — Pattern 1 (revised); Pitfall 1 (wrong thread)
+# Persistent hidden CTk root with thread-safe UI scheduling.
 #
-# ARCHITECTURE: rumps owns the main thread (NSRunLoop).
-# CTk root is created on the main thread BEFORE rumps starts.
-# A rumps.Timer calls tick() every 50ms to pump tkinter events.
-# No background threads — all UI runs on the main thread.
+# ARCHITECTURE:
+#   - setup()          called on the main thread before spawning rumps thread
+#   - get_root()       returns the CTk root (main.py calls .mainloop() on it)
+#   - enqueue(fn)      thread-safe via root.after(0, ...) — safe from any thread
 #
-# API:
-#   setup()        — create hidden CTk root; MUST be called on the main thread before rumps
-#   tick()         — drain queue + pump tkinter; called by rumps.Timer in main.py
-#   enqueue(fn)    — thread-safe: schedule UI work from any thread
-import queue
+# WHY after(0) INSTEAD OF root.update():
+#   root.update() called from a rumps Timer causes GIL re-entrancy —
+#   Tcl fires Python callbacks (PythonCmd) while Python already holds the GIL,
+#   causing SIGABRT. after(0, ...) schedules work on the tkinter event loop
+#   without holding the GIL, which is safe from any thread.
 import customtkinter as ctk
 
-_queue: queue.Queue = queue.Queue()
 _root: ctk.CTk | None = None
 
 
 def setup() -> None:
-    """Create the hidden CTk root on the main thread. Call before rumps.App.run()."""
+    """Create the hidden CTk root on the main thread. MUST be called first."""
     global _root
     ctk.set_appearance_mode("light")
     ctk.set_default_color_theme("blue")  # overridden by per-widget fg_color
@@ -27,22 +25,13 @@ def setup() -> None:
     _root.withdraw()  # Hidden root — never shown to user
 
 
-def tick() -> None:
-    """Drain the work queue and pump the tkinter event loop.
-    Must be called periodically from the main thread (via rumps.Timer).
-    """
-    if _root is None:
-        return
-    try:
-        while True:
-            fn, kwargs = _queue.get_nowait()
-            fn(**kwargs)
-    except queue.Empty:
-        pass
-    _root.update_idletasks()
-    _root.update()
+def get_root() -> ctk.CTk:
+    """Return the CTk root. main.py calls get_root().mainloop() to run the event loop."""
+    assert _root is not None, "setup() must be called before get_root()"
+    return _root
 
 
 def enqueue(fn, **kwargs) -> None:
-    """Thread-safe: schedule UI work from any thread (rumps callbacks, timers, etc)."""
-    _queue.put((fn, kwargs))
+    """Thread-safe: schedule UI work on the tkinter main thread from any thread."""
+    if _root is not None:
+        _root.after(0, lambda: fn(**kwargs))

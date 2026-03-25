@@ -1,4 +1,4 @@
-"""TONE-03: Style constants are valid hex colors; font config is correct type."""
+"""TONE-03: Style constants are valid hex colors."""
 import pytest
 import re
 
@@ -8,21 +8,28 @@ HEX_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
 def test_color_constants():
     """All color constants in styles.py are valid 6-digit hex strings."""
     from ui.styles import (  # noqa: PLC0415
-        LAVENDER_BG,
-        PEACH_ACCENT,
-        CREAM_TEXT,
+        SAGE_BG,
+        SAGE_CARD,
+        DARK_TEXT,
+        SAGE_BUTTON,
+        BUTTON_HOVER,
         BORDER_COLOR,
-        WHITE_CARD,
+        CAT_CREAM,
+        CAT_PINK,
+        CAT_OUTLINE,
     )
-    for name, value in [
-        ("LAVENDER_BG", LAVENDER_BG),
-        ("PEACH_ACCENT", PEACH_ACCENT),
-        ("CREAM_TEXT", CREAM_TEXT),
-        ("BORDER_COLOR", BORDER_COLOR),
-        ("WHITE_CARD", WHITE_CARD),
-    ]:
-        assert HEX_PATTERN.match(value), f"{name}={value!r} is not a valid #RRGGBB hex string"
+    constants = {
+        "SAGE_BG":      SAGE_BG,
+        "SAGE_CARD":    SAGE_CARD,
+        "DARK_TEXT":    DARK_TEXT,
+        "SAGE_BUTTON":  SAGE_BUTTON,
+        "BUTTON_HOVER": BUTTON_HOVER,
+        "BORDER_COLOR": BORDER_COLOR,
+        "CAT_CREAM":    CAT_CREAM,
+        "CAT_PINK":     CAT_PINK,
+        "CAT_OUTLINE":  CAT_OUTLINE,
+    }
+    for name, value in constants.items():
+        assert HEX_PATTERN.match(value), f"{name}={value!r} is not a valid #RRGGBB hex"
 
-    # Spot-check expected palette values
-    assert LAVENDER_BG == "#E8D5F5", f"LAVENDER_BG must be #E8D5F5, got {LAVENDER_BG!r}"
-    assert PEACH_ACCENT == "#FFD4B8", f"PEACH_ACCENT must be #FFD4B8, got {PEACH_ACCENT!r}"
+    assert SAGE_BG == "#C8D5BC"
