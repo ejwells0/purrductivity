@@ -135,7 +135,8 @@ def _next_fire_label(task: dict) -> tuple[str, str]:
     elif t == "daily":
         return f"Daily at {time_str}", DARK_TEXT
     elif t == "weekly":
-        return f"Weekly at {time_str}", DARK_TEXT
+        dow_name = _DOW_NAME.get(task.get("day_of_week", 0), "?")
+        return f"Every {dow_name} at {time_str}", DARK_TEXT
     elif t == "quarterly":
         due = task.get("due_quarter", "")
         return f"Due {due}" if due else "Quarterly", DARK_TEXT
@@ -327,6 +328,7 @@ def _render_fields(field_frame: ctk.CTkFrame, task_type: str) -> dict:
         _add_option_menu("Reminder time", "time", _TIME_SLOTS, "9:00 AM")
 
     elif task_type == "Weekly":
+        _add_option_menu("Day of week", "day_of_week", _DOW_OPTIONS, "Mon")
         _add_option_menu("Reminder time", "time", _TIME_SLOTS, "9:00 AM")
         # Optional weekly target toggle
         _label("Set weekly target?")
@@ -489,6 +491,8 @@ def _save_task(parent: ctk.CTkFrame, fields: dict, type_var: ctk.StringVar,
         )
 
     elif task_type == "Weekly":
+        dow_var = fields.get("day_of_week")
+        day_of_week = _parse_dow(dow_var.get() if dow_var else "Mon")
         weekly_var = fields.get("weekly_target", None)
         weekly_str = weekly_var.get() if weekly_var else "1"  # StringVar, default "1"
         try:
@@ -499,6 +503,7 @@ def _save_task(parent: ctk.CTkFrame, fields: dict, type_var: ctk.StringVar,
         store.add_task(
             type="weekly",
             name=name_val,
+            day_of_week=day_of_week,
             weekly_target=weekly_target,
             hour=hour,
             minute=minute,
