@@ -13,19 +13,20 @@
 # inside functions only.
 import os
 import random
-from datetime import datetime
+from datetime import datetime, date as _date
 
+import tkinter as tk
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageTk
 from AppKit import NSScreen
 
 from ui.styles import (
     SAGE_BG, SAGE_CARD, DARK_TEXT, SAGE_BUTTON, BUTTON_HOVER,
-    BORDER_COLOR, CAT_PINK,
+    BORDER_COLOR, CAT_PINK, MUTED_TEXT, DESTRUCTIVE,
 )
 
 PANEL_WIDTH  = 340
-PANEL_HEIGHT = 460
+PANEL_HEIGHT = 570
 
 _CATS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "cats")
 _CAT_FILES = sorted(
@@ -33,6 +34,9 @@ _CAT_FILES = sorted(
 )
 
 _panel: ctk.CTkToplevel | None = None
+_active_tab: str = "personal"
+_active_filter: str = "all"   # "all" | "today" | "week"
+_expanded_row: list = []   # at most one expanded row card at a time
 
 # Lazy store access — populated on first call, mirrors reminder_popup.py pattern
 _store = None
@@ -58,6 +62,31 @@ def _load_cat_image(size: int = 160) -> ctk.CTkImage:
     path = os.path.join(_CATS_DIR, random.choice(_CAT_FILES))
     img = Image.open(path).convert("RGBA")
     return ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
+
+
+def _draw_cats_on_canvas(canvas: tk.Canvas) -> None:
+    """Clear and redraw a fresh random set of cats on the strip canvas."""
+    canvas.delete("all")
+    cat_size  = 44
+    y_offsets = [10,  4, 14,  6,  8,  2, 12,  5, 10,  4]
+    step = cat_size + 2
+    positions = list(range(-20, PANEL_WIDTH + cat_size, step))
+    canvas._cat_photos = []
+    for i, x in enumerate(positions):
+        y = y_offsets[i % len(y_offsets)]
+        path = os.path.join(_CATS_DIR, random.choice(_CAT_FILES))
+        pil_img = Image.open(path).convert("RGBA").resize((cat_size, cat_size), Image.LANCZOS)
+        photo = ImageTk.PhotoImage(pil_img)
+        canvas._cat_photos.append(photo)
+        canvas.create_image(x, y, image=photo, anchor="nw")
+
+
+def _add_cat_strip(win: ctk.CTkToplevel) -> tk.Canvas:
+    """Add a decorative row of cats at the bottom. Returns the canvas."""
+    canvas = tk.Canvas(win, height=58, bg=SAGE_BG, highlightthickness=0, bd=0)
+    canvas.pack(fill="x", side="bottom")
+    _draw_cats_on_canvas(canvas)
+    return canvas
 
 
 # ── Day-of-week helpers ────────────────────────────────────────────────────────
@@ -100,6 +129,11 @@ def _quarter_options(n: int = 8) -> list:
 def _parse_dow(val: str) -> int | None:
     """Parse "Mon"/"Tue"/... to 0-6. Returns None on failure."""
     return _DOW_ABBR.get(val.strip().lower()[:3])
+
+
+def _format_time(hour: int, minute: int) -> str:
+    """Convert hour/minute to '9:00 AM' slot string."""
+    return datetime(2000, 1, 1, hour, minute).strftime("%-I:%M %p")
 
 
 def _parse_time(val: str) -> tuple[int, int] | None:
@@ -154,121 +188,319 @@ def _badge_label(task_type: str) -> str:
     return task_type.capitalize()
 
 
+# ── Filter helpers ────────────────────────────────────────────────────────────
+
+def _fires_today(task: dict, today: _date) -> bool:
+    t = task.get("type", "")
+    dow = today.weekday()
+    if t == "daily":
+        return True
+    if t in ("scheduled", "weekly"):
+        return task.get("day_of_week") == dow
+    if t == "quarterly":
+        return task.get("check_in_enabled", False) and task.get("check_in_dow") == dow
+    return False
+
+
+def _fires_this_week(task: dict) -> bool:
+    t = task.get("type", "")
+    if t in ("daily", "scheduled", "weekly"):
+        return True
+    if t == "quarterly":
+        return task.get("check_in_enabled", False)
+    return False
+
+
+def _done_today(task: dict, today: _date) -> bool:
+    last_done = task.get("last_done")
+    if not last_done:
+        return False
+    try:
+        return datetime.fromisoformat(last_done).date() == today
+    except (ValueError, TypeError):
+        return False
+
+
 # ── List View ─────────────────────────────────────────────────────────────────
 
-def _show_list_view(parent: ctk.CTkFrame) -> None:
-    """Populate parent with scrollable task list + Add Task button, or empty state."""
-    from ui.styles import BODY_FONT, SMALL_FONT, TITLE_FONT  # noqa: PLC0415
+def _delete_task(task_id: str, parent: ctk.CTkFrame, category: str) -> None:
+    """Delete a task from store, cancel its scheduler job, refresh list."""
+    from ui.tk_host import send_to_main  # noqa: PLC0415
+    _get_store().delete_task(task_id)
+    send_to_main("cancel_job", task_id=task_id)
+    _show_list_view(parent, category=category)
 
-    # Clear existing children
+
+def _draw_progress_bar(parent: ctk.CTkFrame, fraction: float, fill_color: str,
+                       width: int = 200) -> None:
+    """Draw a thin read-only progress bar. fraction is 0.0–1.0."""
+    bar_bg = ctk.CTkFrame(parent, fg_color=BORDER_COLOR, corner_radius=4,
+                          width=width, height=8)
+    bar_bg.pack_propagate(False)
+    bar_bg.pack(fill="x", pady=(2, 0))
+    fill_w = max(4, int(fraction * width))
+    bar_fill = ctk.CTkFrame(bar_bg, fg_color=fill_color, corner_radius=4,
+                             width=fill_w, height=8)
+    bar_fill.pack_propagate(False)
+    bar_fill.place(x=0, y=0)
+
+
+def _pause_task(task_id: str, parent: ctk.CTkFrame, category: str) -> None:
+    """Write paused=True to store, cancel APScheduler job, refresh list."""
+    from ui.tk_host import send_to_main  # noqa: PLC0415
+    _get_store().update_task(task_id, paused=True)
+    send_to_main("cancel_job", task_id=task_id)
+    _show_list_view(parent, category=category)
+
+
+def _resume_task(task_id: str, parent: ctk.CTkFrame, category: str) -> None:
+    """Write paused=False to store, re-register APScheduler job, refresh list."""
+    from ui.tk_host import send_to_main  # noqa: PLC0415
+    _get_store().update_task(task_id, paused=False)
+    send_to_main("reschedule_task", task_id=task_id)
+    _show_list_view(parent, category=category)
+
+
+def _confirm_delete(task_id: str, task_name: str, parent: ctk.CTkFrame,
+                    category: str) -> None:
+    """Show CTkToplevel confirm dialog before deleting."""
+    from ui.styles import BODY_FONT, SMALL_FONT  # noqa: PLC0415
+    from ui.tk_host import get_root  # noqa: PLC0415
+    dlg = ctk.CTkToplevel(get_root())
+    dlg.title("")
+    dlg.geometry("280x140")
+    dlg.configure(fg_color=SAGE_BG)
+    dlg.resizable(False, False)
+    dlg.attributes("-topmost", True)
+    ctk.CTkLabel(
+        dlg,
+        text=f"Delete {task_name}?\nThis can't be undone.",
+        font=BODY_FONT,
+        text_color=DARK_TEXT,
+        fg_color="transparent",
+        wraplength=240,
+        justify="center",
+    ).pack(pady=(20, 12), padx=16)
+    btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+    btn_frame.pack(fill="x", padx=16)
+    ctk.CTkButton(
+        btn_frame,
+        text="Delete",
+        fg_color=DESTRUCTIVE,
+        hover_color="#A93226",
+        text_color="#FFFFFF",
+        corner_radius=10,
+        height=32,
+        command=lambda: [dlg.destroy(), _delete_task(task_id, parent, category)],
+    ).pack(side="left", expand=True, fill="x", padx=(0, 4))
+    ctk.CTkButton(
+        btn_frame,
+        text="Cancel",
+        fg_color=SAGE_CARD,
+        hover_color=BUTTON_HOVER,
+        text_color=DARK_TEXT,
+        corner_radius=10,
+        height=32,
+        command=dlg.destroy,
+    ).pack(side="left", expand=True, fill="x")
+    dlg.deiconify()
+    dlg.after(50, dlg.lift)
+
+
+def _toggle_expand(action_frame: ctk.CTkFrame) -> None:
+    """Expand action_frame for the clicked row; collapse any previously open row."""
+    global _expanded_row
+    if _expanded_row and _expanded_row[0] is not action_frame:
+        _expanded_row[0].pack_forget()
+        _expanded_row.clear()
+    if action_frame.winfo_ismapped():
+        action_frame.pack_forget()
+        _expanded_row.clear()
+    else:
+        action_frame.pack(fill="x", padx=8, pady=(0, 6))
+        _expanded_row[:] = [action_frame]
+
+
+def _show_list_view(parent: ctk.CTkFrame, category: str = "personal") -> None:
+    """Populate parent with enriched scrollable task list + Add Task button."""
+    from ui.styles import BODY_FONT, SMALL_FONT, TITLE_FONT  # noqa: PLC0415
+    from store import is_behind  # noqa: PLC0415
+
+    global _expanded_row
+    _expanded_row.clear()
+
     for widget in parent.winfo_children():
         widget.destroy()
 
-    tasks = _get_store().get_active_tasks()
+    today = _date.today()
+    # Use get_all_tasks() — paused tasks must appear (dimmed) so user can resume
+    all_tasks = _get_store().get_all_tasks()
+    tasks = [t for t in all_tasks if t.get("category", "personal") == category]
+
+    if _active_filter == "today":
+        tasks = [t for t in tasks if t.get("paused") or _fires_today(t, today)]
+    elif _active_filter == "week":
+        tasks = [t for t in tasks if t.get("paused") or _fires_this_week(t)]
 
     if not tasks:
-        # ── Empty state ───────────────────────────────────────────────
-        cat_img = _load_cat_image(80)
+        empty_title = "No tasks yet"
+        empty_body = (
+            "No work tasks yet.\nHit '+ Add Task' to start."
+            if category == "work"
+            else "You haven't added anything to chase yet.\nHit '+ Add Task' to start."
+        )
         ctk.CTkLabel(
-            parent,
-            image=cat_img,
-            text="",
-            fg_color="transparent",
-        ).pack(pady=(24, 4))
-
-        ctk.CTkLabel(
-            parent,
-            text="No tasks yet",
-            font=TITLE_FONT,
-            text_color=DARK_TEXT,
-            fg_color="transparent",
+            parent, text=empty_title, font=TITLE_FONT,
+            text_color=DARK_TEXT, fg_color="transparent",
         ).pack(pady=(4, 2))
-
         ctk.CTkLabel(
-            parent,
-            text="You haven't added anything to chase yet.\nHit '+ Add Task' to start.",
-            font=BODY_FONT,
-            text_color=DARK_TEXT,
-            fg_color="transparent",
-            justify="center",
+            parent, text=empty_body, font=BODY_FONT,
+            text_color=DARK_TEXT, fg_color="transparent", justify="center",
         ).pack(pady=(2, 16))
 
     else:
-        # ── Scrollable task list ──────────────────────────────────────
         scroll = ctk.CTkScrollableFrame(
-            parent,
-            fg_color=SAGE_BG,
-            width=PANEL_WIDTH - 32,
+            parent, fg_color=SAGE_BG, width=PANEL_WIDTH - 32,
         )
         scroll.pack(fill="both", expand=True, padx=0, pady=(8, 4))
 
         for task in tasks:
-            row = ctk.CTkFrame(scroll, fg_color=SAGE_CARD, corner_radius=8)
-            row.pack(fill="x", padx=0, pady=3)
-            row.grid_columnconfigure(0, weight=1)
-            row.grid_columnconfigure(1, weight=0)
+            is_paused = task.get("paused", False)
+            done = _done_today(task, today)
+            task_type = task.get("type", "")
+            is_goal = task_type in ("weekly", "quarterly")
 
-            # Left column: task name + fire time
-            left = ctk.CTkFrame(row, fg_color="transparent")
-            left.grid(row=0, column=0, sticky="nsew", padx=(10, 4), pady=6)
+            # Card color: dimmer background for paused tasks
+            card_color = SAGE_BG if is_paused else SAGE_CARD
+            name_color = MUTED_TEXT if is_paused else DARK_TEXT
+
+            # ── Row card ─────────────────────────────────────────────
+            row_card = ctk.CTkFrame(scroll, fg_color=card_color, corner_radius=8)
+            row_card.pack(fill="x", padx=0, pady=3)
+
+            # ── Main info row (click to expand) ──────────────────────
+            info_row = ctk.CTkFrame(row_card, fg_color="transparent")
+            info_row.pack(fill="x", padx=8, pady=(8, 4))
+            info_row.grid_columnconfigure(0, weight=1)
+            info_row.grid_columnconfigure(1, weight=0)
+
+            # Left: task name + status subtitle
+            left = ctk.CTkFrame(info_row, fg_color="transparent")
+            left.grid(row=0, column=0, sticky="nsew")
 
             ctk.CTkLabel(
-                left,
-                text=task.get("name", "Unnamed"),
-                font=BODY_FONT,
-                text_color=DARK_TEXT,
-                fg_color="transparent",
-                anchor="w",
+                left, text=task.get("name", "Unnamed"), font=BODY_FONT,
+                text_color=name_color, fg_color="transparent", anchor="w",
             ).pack(fill="x")
 
-            fire_text, fire_color = _next_fire_label(task)
-            if fire_text:
+            # Status subtitle
+            if is_paused:
+                status_text, status_color = "Paused", MUTED_TEXT
+            elif done:
+                status_text, status_color = "Done today", SAGE_BUTTON
+            elif is_goal:
+                behind = is_behind(task, today)
+                if behind:
+                    status_text, status_color = "Behind", DESTRUCTIVE
+                else:
+                    status_text, status_color = "On Track", SAGE_BUTTON
+            else:
+                status_text, status_color = _next_fire_label(task)
+
+            if status_text:
                 ctk.CTkLabel(
-                    left,
-                    text=fire_text,
-                    font=SMALL_FONT,
-                    text_color=fire_color,
-                    fg_color="transparent",
-                    anchor="w",
+                    left, text=status_text, font=SMALL_FONT,
+                    text_color=status_color, fg_color="transparent", anchor="w",
                 ).pack(fill="x")
 
-            # Right column: type badge (CTkFrame wrapper for border support)
-            border_c, text_c = _badge_colors(task.get("type", ""))
+            # Progress bar for goal tasks (not paused, not done)
+            if is_goal and not is_paused:
+                if task_type == "weekly":
+                    target = task.get("weekly_target", 1)
+                    actual = task.get("completed_count", 0)
+                    fraction = min(actual / target, 1.0) if target else 0.0
+                else:  # quarterly
+                    fraction = min(task.get("progress", 0) / 100, 1.0)
+                fill_col = DESTRUCTIVE if is_behind(task, today) else SAGE_BUTTON
+                _draw_progress_bar(left, fraction, fill_col, width=180)
+
+            # Right: type badge
+            border_c, text_c = _badge_colors(task_type)
             badge_frame = ctk.CTkFrame(
-                row,
-                fg_color=SAGE_CARD,
-                border_width=1,
-                border_color=border_c,
-                corner_radius=4,
+                info_row, fg_color=SAGE_CARD, border_width=1,
+                border_color=border_c, corner_radius=4,
             )
-            badge_frame.grid(row=0, column=1, sticky="e", padx=(4, 10), pady=6)
+            badge_frame.grid(row=0, column=1, sticky="ne", padx=(4, 0))
             ctk.CTkLabel(
-                badge_frame,
-                text=_badge_label(task.get("type", "")),
-                font=SMALL_FONT,
-                text_color=text_c,
-                fg_color="transparent",
+                badge_frame, text=_badge_label(task_type), font=SMALL_FONT,
+                text_color=text_c, fg_color="transparent",
             ).pack(padx=6, pady=2)
+
+            # ── Action sub-frame (hidden until row clicked) ──────────
+            action_frame = ctk.CTkFrame(row_card, fg_color="transparent")
+            # Do NOT pack action_frame here — _toggle_expand does it on click
+
+            _task_snap = task
+            _tid = task["id"]
+            _tname = task.get("name", "this task")
+
+            # Wire up row click on info_row to toggle actions
+            info_row.bind(
+                "<Button-1>",
+                lambda e, af=action_frame: _toggle_expand(af),
+            )
+            # Also bind on left sub-frame and badge so whole row is clickable
+            left.bind("<Button-1>", lambda e, af=action_frame: _toggle_expand(af))
+            badge_frame.bind("<Button-1>", lambda e, af=action_frame: _toggle_expand(af))
+
+            # Action buttons inside action_frame
+            btn_row = ctk.CTkFrame(action_frame, fg_color="transparent")
+            btn_row.pack(fill="x", pady=(0, 2))
+
+            ctk.CTkButton(
+                btn_row, text="Edit", fg_color=SAGE_BUTTON, hover_color=BUTTON_HOVER,
+                text_color=DARK_TEXT, corner_radius=8, height=28,
+                command=lambda t=_task_snap: _show_edit_view(parent, t, category),
+            ).pack(side="left", expand=True, fill="x", padx=(0, 3))
+
+            ctk.CTkButton(
+                btn_row, text="Delete", fg_color=SAGE_CARD, hover_color=BUTTON_HOVER,
+                text_color=DESTRUCTIVE, corner_radius=8, height=28,
+                border_width=1, border_color=DESTRUCTIVE,
+                command=lambda tid=_tid, tn=_tname: _confirm_delete(tid, tn, parent, category),
+            ).pack(side="left", expand=True, fill="x", padx=(3, 3))
+
+            if is_paused:
+                ctk.CTkButton(
+                    btn_row, text="Resume", fg_color=SAGE_BUTTON, hover_color=BUTTON_HOVER,
+                    text_color=DARK_TEXT, corner_radius=8, height=28,
+                    command=lambda tid=_tid: _resume_task(tid, parent, category),
+                ).pack(side="left", expand=True, fill="x", padx=(3, 0))
+            else:
+                ctk.CTkButton(
+                    btn_row, text="Pause", fg_color=SAGE_CARD, hover_color=BUTTON_HOVER,
+                    text_color=DARK_TEXT, corner_radius=8, height=28,
+                    border_width=1, border_color=BORDER_COLOR,
+                    command=lambda tid=_tid: _pause_task(tid, parent, category),
+                ).pack(side="left", expand=True, fill="x", padx=(3, 0))
 
     # ── Add Task button (always shown) ────────────────────────────────
     ctk.CTkButton(
-        parent,
-        text="+ Add Task",
-        fg_color=SAGE_BUTTON,
-        hover_color=BUTTON_HOVER,
-        text_color=DARK_TEXT,
-        corner_radius=12,
-        command=lambda: _show_form_view(parent),
+        parent, text="+ Add Task", fg_color=SAGE_BUTTON, hover_color=BUTTON_HOVER,
+        text_color=DARK_TEXT, corner_radius=12,
+        command=lambda: _show_form_view(parent, category=category),
     ).pack(fill="x", padx=16, pady=(4, 8))
 
 
 # ── Form View ─────────────────────────────────────────────────────────────────
 
-def _render_fields(field_frame: ctk.CTkFrame, task_type: str) -> dict:
+def _render_fields(field_frame: ctk.CTkFrame, task_type: str,
+                   prefill: dict | None = None) -> dict:
     """Populate field_frame with widgets for task_type.
 
     Returns dict mapping field name → widget (CTkEntry, StringVar, BooleanVar, or str).
     All prior children of field_frame are destroyed before rendering.
+    If prefill is provided, widgets are pre-populated with existing task values.
     """
     from ui.styles import BODY_FONT, SMALL_FONT  # noqa: PLC0415
     from datetime import date  # noqa: PLC0415
@@ -277,7 +509,9 @@ def _render_fields(field_frame: ctk.CTkFrame, task_type: str) -> dict:
         widget.destroy()
 
     fields: dict = {}
+    p = prefill or {}
     today_str = date.today().isoformat()
+    start_date_str = p.get("start_date", today_str)
 
     def _label(text: str) -> None:
         ctk.CTkLabel(
@@ -285,17 +519,21 @@ def _render_fields(field_frame: ctk.CTkFrame, task_type: str) -> dict:
             fg_color="transparent", anchor="w",
         ).pack(fill="x", padx=0, pady=(6, 1))
 
-    def _add_entry(label_text: str, key: str, placeholder: str = "") -> ctk.CTkEntry:
+    def _add_entry(label_text: str, key: str, placeholder: str = "",
+                   initial: str = "") -> ctk.CTkEntry:
         _label(label_text)
         entry = ctk.CTkEntry(
             field_frame, fg_color=SAGE_CARD, border_color=BORDER_COLOR,
             text_color=DARK_TEXT, font=BODY_FONT, placeholder_text=placeholder,
         )
         entry.pack(fill="x", padx=0, pady=(0, 2))
+        if initial:
+            entry.insert(0, initial)
         fields[key] = entry
         return entry
 
-    def _add_option_menu(label_text: str, key: str, values: list, default: str) -> ctk.CTkOptionMenu:
+    def _add_option_menu(label_text: str, key: str, values: list,
+                         default: str) -> ctk.CTkOptionMenu:
         _label(label_text)
         var = ctk.StringVar(value=default)
         menu = ctk.CTkOptionMenu(
@@ -308,33 +546,54 @@ def _render_fields(field_frame: ctk.CTkFrame, task_type: str) -> dict:
         fields[key] = var   # store StringVar so _save_task calls .get()
         return menu
 
-    # ── Task name (always present, CTkEntry) ─────────────────────────────
-    _add_entry("Task name", "name")
+    def _add_time_combo(label_text: str, key: str, default: str) -> ctk.CTkComboBox:
+        """Time picker: dropdown for common slots, but also accepts typed input (e.g. 22:33)."""
+        _label(label_text)
+        combo = ctk.CTkComboBox(
+            field_frame, values=_TIME_SLOTS,
+            fg_color=SAGE_CARD, border_color=BORDER_COLOR,
+            button_color=SAGE_BUTTON, button_hover_color=BUTTON_HOVER,
+            text_color=DARK_TEXT, font=BODY_FONT,
+        )
+        combo.set(default)
+        combo.pack(fill="x", padx=0, pady=(0, 2))
+        fields[key] = combo  # CTkComboBox.get() works the same as StringVar.get()
+        return combo
 
-    # ── Start date: non-editable label pre-filled with today ─────────────
+    # ── Task name (always present, CTkEntry) ─────────────────────────────
+    _add_entry("Task name", "name", initial=p.get("name", ""))
+
+    # ── Start date: non-editable label ───────────────────────────────────
     _label("Start date")
     ctk.CTkLabel(
-        field_frame, text=today_str, font=BODY_FONT, text_color=DARK_TEXT,
+        field_frame, text=start_date_str, font=BODY_FONT, text_color=DARK_TEXT,
         fg_color=SAGE_CARD, anchor="w", corner_radius=6,
     ).pack(fill="x", padx=0, pady=(0, 2), ipady=6)
-    fields["start_date"] = today_str   # store as string constant, not widget
+    fields["start_date"] = start_date_str
 
     # ── Type-specific fields ─────────────────────────────────────────────
     if task_type == "Scheduled":
-        _add_option_menu("Day of week", "day_of_week", _DOW_OPTIONS, "Mon")
-        _add_option_menu("Reminder time", "time", _TIME_SLOTS, "9:00 AM")
+        dow_default = _DOW_NAME.get(p.get("day_of_week", 0), "Mon")
+        time_default = _format_time(p.get("hour", 9), p.get("minute", 0)) if p else "9:00 AM"
+        _add_option_menu("Day of week", "day_of_week", _DOW_OPTIONS, dow_default)
+        _add_time_combo("Reminder time", "time", time_default)
 
     elif task_type == "Daily":
-        _add_option_menu("Reminder time", "time", _TIME_SLOTS, "9:00 AM")
+        time_default = _format_time(p.get("hour", 9), p.get("minute", 0)) if p else "9:00 AM"
+        _add_time_combo("Reminder time", "time", time_default)
 
     elif task_type == "Weekly":
-        _add_option_menu("Day of week", "day_of_week", _DOW_OPTIONS, "Mon")
-        _add_option_menu("Reminder time", "time", _TIME_SLOTS, "9:00 AM")
+        dow_default = _DOW_NAME.get(p.get("day_of_week", 0), "Mon")
+        time_default = _format_time(p.get("hour", 9), p.get("minute", 0)) if p else "9:00 AM"
+        _add_option_menu("Day of week", "day_of_week", _DOW_OPTIONS, dow_default)
+        _add_time_combo("Reminder time", "time", time_default)
         # Optional weekly target toggle
+        prefill_target = p.get("weekly_target", 1)
+        prefill_toggle = prefill_target > 1
         _label("Set weekly target?")
-        toggle_var = ctk.BooleanVar(value=False)
-        target_var = ctk.StringVar(value="1")
-        target_menu_holder: list = []   # mutable container for the CTkOptionMenu ref
+        toggle_var = ctk.BooleanVar(value=prefill_toggle)
+        target_var = ctk.StringVar(value=str(prefill_target))
+        target_menu_holder: list = []
 
         def _on_toggle_change() -> None:
             if toggle_var.get():
@@ -361,34 +620,64 @@ def _render_fields(field_frame: ctk.CTkFrame, task_type: str) -> dict:
             checkmark_color=DARK_TEXT, border_color=BORDER_COLOR,
             command=_on_toggle_change,
         ).pack(anchor="w", padx=0, pady=(0, 2))
-        fields["weekly_target"] = target_var   # always valid: "1" if toggle OFF
+        # Pre-show the target menu if toggle was on
+        if prefill_toggle:
+            m = ctk.CTkOptionMenu(
+                field_frame,
+                values=[str(i) for i in range(1, 11)],
+                variable=target_var,
+                fg_color=SAGE_CARD, button_color=SAGE_BUTTON,
+                button_hover_color=BUTTON_HOVER, text_color=DARK_TEXT,
+                font=BODY_FONT,
+            )
+            m.pack(fill="x", padx=0, pady=(0, 2))
+            target_menu_holder.append(m)
+        fields["weekly_target"] = target_var
 
     elif task_type == "Quarterly":
-        _add_option_menu("Due date", "due_quarter", _quarter_options(), _quarter_options()[0])
+        q_opts = _quarter_options()
+        due_default = p.get("due_quarter", q_opts[0])
+        if due_default not in q_opts:
+            q_opts = [due_default] + q_opts
+        _add_option_menu("Due date", "due_quarter", q_opts, due_default)
         # Opt-in weekly check-in
+        prefill_checkin = p.get("check_in_enabled", False)
+        prefill_checkin_day = _DOW_NAME.get(p.get("check_in_dow", 0), "Mon")
+        prefill_checkin_time = _format_time(p.get("hour", 9), p.get("minute", 0)) if p else "9:00 AM"
         _label("Weekly check-in?")
-        checkin_var = ctk.BooleanVar(value=False)
-        checkin_day_var = ctk.StringVar(value="Mon")
+        checkin_var = ctk.BooleanVar(value=prefill_checkin)
+        checkin_day_var = ctk.StringVar(value=prefill_checkin_day)
+        checkin_time_var = ctk.StringVar(value=prefill_checkin_time)
         checkin_menu_holder: list = []
 
         def _on_checkin_change() -> None:
             if checkin_var.get():
                 if not checkin_menu_holder:
-                    lbl2 = ctk.CTkLabel(
+                    lbl_day = ctk.CTkLabel(
                         field_frame, text="Check-in day", font=SMALL_FONT,
                         text_color=DARK_TEXT, fg_color="transparent", anchor="w",
                     )
-                    lbl2.pack(fill="x", padx=0, pady=(6, 1))
-                    m = ctk.CTkOptionMenu(
-                        field_frame,
-                        values=_DOW_OPTIONS,
-                        variable=checkin_day_var,
+                    lbl_day.pack(fill="x", padx=0, pady=(6, 1))
+                    m_day = ctk.CTkOptionMenu(
+                        field_frame, values=_DOW_OPTIONS, variable=checkin_day_var,
                         fg_color=SAGE_CARD, button_color=SAGE_BUTTON,
                         button_hover_color=BUTTON_HOVER, text_color=DARK_TEXT,
                         font=BODY_FONT,
                     )
-                    m.pack(fill="x", padx=0, pady=(0, 2))
-                    checkin_menu_holder.extend([lbl2, m])
+                    m_day.pack(fill="x", padx=0, pady=(0, 2))
+                    lbl_time = ctk.CTkLabel(
+                        field_frame, text="Check-in time", font=SMALL_FONT,
+                        text_color=DARK_TEXT, fg_color="transparent", anchor="w",
+                    )
+                    lbl_time.pack(fill="x", padx=0, pady=(6, 1))
+                    m_time = ctk.CTkOptionMenu(
+                        field_frame, values=_TIME_SLOTS, variable=checkin_time_var,
+                        fg_color=SAGE_CARD, button_color=SAGE_BUTTON,
+                        button_hover_color=BUTTON_HOVER, text_color=DARK_TEXT,
+                        font=BODY_FONT,
+                    )
+                    m_time.pack(fill="x", padx=0, pady=(0, 2))
+                    checkin_menu_holder.extend([lbl_day, m_day, lbl_time, m_time])
             else:
                 for w in checkin_menu_holder:
                     w.destroy()
@@ -400,11 +689,39 @@ def _render_fields(field_frame: ctk.CTkFrame, task_type: str) -> dict:
             checkmark_color=DARK_TEXT, border_color=BORDER_COLOR,
             command=_on_checkin_change,
         ).pack(anchor="w", padx=0, pady=(0, 2))
-        fields["check_in_enabled"] = checkin_var   # BooleanVar
-        fields["check_in_day"] = checkin_day_var    # StringVar
+        # Pre-show check-in fields if enabled
+        if prefill_checkin:
+            lbl_day = ctk.CTkLabel(
+                field_frame, text="Check-in day", font=SMALL_FONT,
+                text_color=DARK_TEXT, fg_color="transparent", anchor="w",
+            )
+            lbl_day.pack(fill="x", padx=0, pady=(6, 1))
+            m_day = ctk.CTkOptionMenu(
+                field_frame, values=_DOW_OPTIONS, variable=checkin_day_var,
+                fg_color=SAGE_CARD, button_color=SAGE_BUTTON,
+                button_hover_color=BUTTON_HOVER, text_color=DARK_TEXT,
+                font=BODY_FONT,
+            )
+            m_day.pack(fill="x", padx=0, pady=(0, 2))
+            lbl_time = ctk.CTkLabel(
+                field_frame, text="Check-in time", font=SMALL_FONT,
+                text_color=DARK_TEXT, fg_color="transparent", anchor="w",
+            )
+            lbl_time.pack(fill="x", padx=0, pady=(6, 1))
+            m_time = ctk.CTkOptionMenu(
+                field_frame, values=_TIME_SLOTS, variable=checkin_time_var,
+                fg_color=SAGE_CARD, button_color=SAGE_BUTTON,
+                button_hover_color=BUTTON_HOVER, text_color=DARK_TEXT,
+                font=BODY_FONT,
+            )
+            m_time.pack(fill="x", padx=0, pady=(0, 2))
+            checkin_menu_holder.extend([lbl_day, m_day, lbl_time, m_time])
+        fields["check_in_enabled"] = checkin_var
+        fields["check_in_day"] = checkin_day_var
+        fields["check_in_time"] = checkin_time_var
 
     # ── Notes (always present) ────────────────────────────────────────────
-    _add_entry("Notes (optional)", "notes", "")
+    _add_entry("Notes (optional)", "notes", initial=p.get("notes", ""))
 
     return fields
 
@@ -425,7 +742,7 @@ def _show_error(parent: ctk.CTkFrame, message: str) -> None:
 
 
 def _save_task(parent: ctk.CTkFrame, fields: dict, type_var: ctk.StringVar,
-               error_frame: ctk.CTkFrame) -> None:
+               error_frame: ctk.CTkFrame, category: str = "personal") -> None:
     """Validate fields, call store.add_task(), switch back to list view on success."""
     # Clear prior error messages
     for widget in error_frame.winfo_children():
@@ -461,7 +778,10 @@ def _save_task(parent: ctk.CTkFrame, fields: dict, type_var: ctk.StringVar,
         if parsed:
             hour, minute = parsed
 
+    from ui.tk_host import send_to_main  # noqa: PLC0415
+
     store = _get_store()
+    task_id: str | None = None
 
     if task_type == "Scheduled":
         dow_val = fields.get("day_of_week", None)
@@ -470,7 +790,7 @@ def _save_task(parent: ctk.CTkFrame, fields: dict, type_var: ctk.StringVar,
         if dow is None:
             _show_error(error_frame, "Enter a valid day (e.g. Mon, Tue, Wed).")
             return
-        store.add_task(
+        task_id = store.add_task(
             type="scheduled",
             name=name_val,
             day_of_week=dow,
@@ -478,16 +798,18 @@ def _save_task(parent: ctk.CTkFrame, fields: dict, type_var: ctk.StringVar,
             minute=minute,
             start_date=start_date_str,
             notes=notes_val,
+            category=category,
         )
 
     elif task_type == "Daily":
-        store.add_task(
+        task_id = store.add_task(
             type="daily",
             name=name_val,
             hour=hour,
             minute=minute,
             start_date=start_date_str,
             notes=notes_val,
+            category=category,
         )
 
     elif task_type == "Weekly":
@@ -500,7 +822,7 @@ def _save_task(parent: ctk.CTkFrame, fields: dict, type_var: ctk.StringVar,
         except (ValueError, TypeError):
             _show_error(error_frame, "Enter a whole number for weekly target.")
             return
-        store.add_task(
+        task_id = store.add_task(
             type="weekly",
             name=name_val,
             day_of_week=day_of_week,
@@ -509,6 +831,7 @@ def _save_task(parent: ctk.CTkFrame, fields: dict, type_var: ctk.StringVar,
             minute=minute,
             start_date=start_date_str,
             notes=notes_val,
+            category=category,
         )
 
     elif task_type == "Quarterly":
@@ -519,24 +842,184 @@ def _save_task(parent: ctk.CTkFrame, fields: dict, type_var: ctk.StringVar,
         check_in_day_var = fields.get("check_in_day")
         check_in_day_str = check_in_day_var.get() if check_in_day_var else "Mon"
         check_in_dow = _parse_dow(check_in_day_str) if check_in_enabled else None
-        store.add_task(
+        check_in_time_var = fields.get("check_in_time")
+        check_in_time_str = check_in_time_var.get() if check_in_time_var else "9:00 AM"
+        parsed_time = _parse_time(check_in_time_str) if check_in_enabled else None
+        ci_hour, ci_minute = parsed_time if parsed_time else (9, 0)
+        task_id = store.add_task(
             type="quarterly",
             name=name_val,
             due_quarter=due_quarter,
             progress=0,
             check_in_enabled=check_in_enabled,
             check_in_dow=check_in_dow,
-            hour=9,     # check-in fires at 9 AM by default
-            minute=0,
+            hour=ci_hour,
+            minute=ci_minute,
             start_date=start_date_str,
             notes=notes_val,
+            category=category,
         )
 
+    # Register the new task with the scheduler immediately
+    if task_id:
+        send_to_main("reschedule_task", task_id=task_id)
+
     # Success — return to list view
-    _show_list_view(parent)
+    _show_list_view(parent, category=category)
 
 
-def _show_form_view(parent: ctk.CTkFrame) -> None:
+def _update_task(parent: ctk.CTkFrame, task_id: str, fields: dict,
+                 type_var: ctk.StringVar, error_frame: ctk.CTkFrame,
+                 category: str = "personal") -> None:
+    """Validate fields, write updates to store, reschedule job, return to list."""
+    from ui.tk_host import send_to_main  # noqa: PLC0415
+
+    for widget in error_frame.winfo_children():
+        widget.destroy()
+
+    task_type = type_var.get()
+    name = fields.get("name")
+    name_val = name.get().strip() if name else ""
+    if not name_val:
+        _show_error(error_frame, "This field is required.")
+        return
+
+    start_date_raw = fields.get("start_date")
+    start_date_str = start_date_raw if isinstance(start_date_raw, str) else datetime.now().date().isoformat()
+
+    notes_entry = fields.get("notes")
+    notes_val = notes_entry.get().strip() if notes_entry else ""
+
+    hour, minute = 9, 0
+    if "time" in fields:
+        time_str = fields["time"].get()
+        parsed = _parse_time(time_str) if time_str else None
+        if parsed is None and time_str:
+            _show_error(error_frame, "Enter a valid time (e.g. 9:00 AM).")
+            return
+        if parsed:
+            hour, minute = parsed
+
+    store = _get_store()
+    updates: dict = {"name": name_val, "notes": notes_val,
+                     "start_date": start_date_str, "category": category,
+                     "type": task_type.lower()}
+
+    if task_type == "Scheduled":
+        dow_val = fields.get("day_of_week")
+        dow = _parse_dow(dow_val.get() if dow_val else "")
+        if dow is None:
+            _show_error(error_frame, "Enter a valid day (e.g. Mon, Tue, Wed).")
+            return
+        updates.update({"day_of_week": dow, "hour": hour, "minute": minute})
+
+    elif task_type == "Daily":
+        updates.update({"hour": hour, "minute": minute})
+
+    elif task_type == "Weekly":
+        dow_var = fields.get("day_of_week")
+        day_of_week = _parse_dow(dow_var.get() if dow_var else "Mon")
+        weekly_var = fields.get("weekly_target")
+        weekly_str = weekly_var.get() if weekly_var else "1"
+        try:
+            weekly_target = int(weekly_str)
+        except (ValueError, TypeError):
+            _show_error(error_frame, "Enter a whole number for weekly target.")
+            return
+        updates.update({"day_of_week": day_of_week, "hour": hour,
+                         "minute": minute, "weekly_target": weekly_target})
+
+    elif task_type == "Quarterly":
+        due_quarter_var = fields.get("due_quarter")
+        due_quarter = due_quarter_var.get() if due_quarter_var else ""
+        check_in_var = fields.get("check_in_enabled")
+        check_in_enabled = check_in_var.get() if check_in_var else False
+        check_in_day_var = fields.get("check_in_day")
+        check_in_day_str = check_in_day_var.get() if check_in_day_var else "Mon"
+        check_in_dow = _parse_dow(check_in_day_str) if check_in_enabled else None
+        check_in_time_var = fields.get("check_in_time")
+        check_in_time_str = check_in_time_var.get() if check_in_time_var else "9:00 AM"
+        parsed_time = _parse_time(check_in_time_str) if check_in_enabled else None
+        ci_hour, ci_minute = parsed_time if parsed_time else (9, 0)
+        updates.update({"due_quarter": due_quarter, "check_in_enabled": check_in_enabled,
+                         "check_in_dow": check_in_dow, "hour": ci_hour, "minute": ci_minute})
+
+    store.update_task(task_id, **updates)
+    send_to_main("reschedule_task", task_id=task_id)
+    _show_list_view(parent, category=category)
+
+
+def _show_edit_view(parent: ctk.CTkFrame, task: dict, category: str) -> None:
+    """Replace parent content with the edit form pre-populated from task."""
+    from ui.styles import BODY_FONT, SMALL_FONT  # noqa: PLC0415
+
+    for widget in parent.winfo_children():
+        widget.destroy()
+
+    # Type selector (pre-set to task's current type)
+    type_map = {"scheduled": "Scheduled", "daily": "Daily",
+                "weekly": "Weekly", "quarterly": "Quarterly"}
+    initial_type = type_map.get(task.get("type", "scheduled"), "Scheduled")
+    type_var = ctk.StringVar(value=initial_type)
+    type_selector = ctk.CTkSegmentedButton(
+        parent,
+        values=["Scheduled", "Daily", "Weekly", "Quarterly"],
+        variable=type_var,
+        fg_color=SAGE_CARD,
+        selected_color=SAGE_BUTTON,
+        selected_hover_color=BUTTON_HOVER,
+        unselected_color=SAGE_CARD,
+        unselected_hover_color=BUTTON_HOVER,
+        text_color=DARK_TEXT,
+    )
+    type_selector.pack(fill="x", padx=16, pady=(0, 4))
+
+    scroll = ctk.CTkScrollableFrame(parent, fg_color=SAGE_BG, width=PANEL_WIDTH - 32)
+    scroll.pack(fill="both", expand=True, padx=0, pady=(2, 0))
+
+    field_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+    field_frame.pack(fill="x", padx=16, pady=0)
+
+    error_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+    error_frame.pack(fill="x", padx=16, pady=0)
+
+    fields = _render_fields(field_frame, type_var.get(), prefill=task)
+
+    def on_type_change(value: str) -> None:
+        nonlocal fields
+        # Keep prefill for name/notes/start_date even when switching type
+        fields = _render_fields(field_frame, value, prefill=task)
+
+    type_selector.configure(command=on_type_change)
+
+    btn_frame = ctk.CTkFrame(parent, fg_color="transparent")
+    btn_frame.pack(fill="x", padx=16, pady=(4, 8))
+
+    task_id = task["id"]
+    ctk.CTkButton(
+        btn_frame,
+        text="Save Changes",
+        fg_color=SAGE_BUTTON,
+        hover_color=BUTTON_HOVER,
+        text_color=DARK_TEXT,
+        corner_radius=12,
+        command=lambda: _update_task(parent, task_id, fields, type_var, error_frame, category),
+    ).pack(fill="x", pady=(0, 4))
+
+    ctk.CTkButton(
+        btn_frame,
+        text="Cancel",
+        fg_color=SAGE_CARD,
+        hover_color=BUTTON_HOVER,
+        text_color=DARK_TEXT,
+        border_width=1,
+        border_color=BORDER_COLOR,
+        corner_radius=12,
+        command=lambda: _show_list_view(parent, category=category),
+    ).pack(fill="x")
+
+
+def _show_form_view(parent: ctk.CTkFrame, category: str = "personal") -> None:
     """Replace parent content with the inline task creation form."""
     from ui.styles import BODY_FONT, SMALL_FONT  # noqa: PLC0415
 
@@ -595,7 +1078,7 @@ def _show_form_view(parent: ctk.CTkFrame) -> None:
         hover_color=BUTTON_HOVER,
         text_color=DARK_TEXT,
         corner_radius=12,
-        command=lambda: _save_task(parent, fields, type_var, error_frame),
+        command=lambda: _save_task(parent, fields, type_var, error_frame, category),
     ).pack(fill="x", pady=(0, 4))
 
     ctk.CTkButton(
@@ -607,7 +1090,7 @@ def _show_form_view(parent: ctk.CTkFrame) -> None:
         border_width=1,
         border_color=BORDER_COLOR,
         corner_radius=12,
-        command=lambda: _show_list_view(parent),
+        command=lambda: _show_list_view(parent, category=category),
     ).pack(fill="x")
 
 
@@ -628,10 +1111,13 @@ def open_panel() -> None:
         # Refresh task list content before showing
         for widget in _panel.winfo_children():
             widget.destroy()
-        _rebuild_panel(_panel)
-        _panel.deiconify()
-        _panel.lift()
-        _panel.after(100, _panel.lift)
+        try:
+            _rebuild_panel(_panel)
+        finally:
+            _panel.deiconify()
+            _panel.lift()
+            _panel.focus_force()
+            _panel.after(100, _panel.lift)
         return
 
     # ── Position: top-right below menu bar ───────────────────────────────
@@ -659,20 +1145,77 @@ def open_panel() -> None:
 
 
 def _rebuild_panel(win: ctk.CTkToplevel) -> None:
-    """Build the panel contents inside win (title + content frame)."""
+    """Build the panel contents inside win (title + tabs + content frame)."""
+    global _active_tab
     from ui.styles import TITLE_FONT  # noqa: PLC0415
 
-    # ── Title ─────────────────────────────────────────────────────────────
+    # ── Cat logo + title ──────────────────────────────────────────────────
+    cat_img = _load_cat_image(52)
+    ctk.CTkLabel(
+        win,
+        image=cat_img,
+        text="",
+        fg_color="transparent",
+    ).pack(pady=(12, 2))
+
     ctk.CTkLabel(
         win,
         text="Purrductivity",
         font=TITLE_FONT,
         text_color=DARK_TEXT,
         fg_color="transparent",
-    ).pack(pady=(16, 4))
+    ).pack(pady=(0, 4))
+
+    # ── Category tab bar ─────────────────────────────────────────────────
+    tab_var = ctk.StringVar(value=_active_tab.capitalize())
+    tab_bar = ctk.CTkSegmentedButton(
+        win,
+        values=["Personal", "Work"],
+        variable=tab_var,
+        fg_color=SAGE_CARD,
+        selected_color=SAGE_BUTTON,
+        selected_hover_color=BUTTON_HOVER,
+        unselected_color=SAGE_CARD,
+        unselected_hover_color=BUTTON_HOVER,
+        text_color=DARK_TEXT,
+    )
+    tab_bar.pack(fill="x", padx=16, pady=(0, 4))
+
+    # ── Filter bar ───────────────────────────────────────────────────────
+    _filter_label_map = {"all": "All", "today": "Today", "week": "This Week"}
+    filter_var = ctk.StringVar(value=_filter_label_map.get(_active_filter, "All"))
+    filter_bar = ctk.CTkSegmentedButton(
+        win,
+        values=["All", "Today", "This Week"],
+        variable=filter_var,
+        fg_color=SAGE_CARD,
+        selected_color=CAT_PINK,
+        selected_hover_color=BUTTON_HOVER,
+        unselected_color=SAGE_CARD,
+        unselected_hover_color=BUTTON_HOVER,
+        text_color=DARK_TEXT,
+    )
+    filter_bar.pack(fill="x", padx=16, pady=(0, 6))
+
+    # ── Cat strip at bottom (must be packed before fill+expand content) ──
+    cat_canvas = _add_cat_strip(win)
 
     # ── Content frame fills remaining space ──────────────────────────────
     content = ctk.CTkFrame(win, fg_color=SAGE_BG)
     content.pack(fill="both", expand=True, padx=0, pady=0)
 
-    _show_list_view(content)
+    def on_tab_change(value: str) -> None:
+        global _active_tab
+        _active_tab = value.lower()
+        _show_list_view(content, category=_active_tab)
+        _draw_cats_on_canvas(cat_canvas)
+
+    def on_filter_change(value: str) -> None:
+        global _active_filter
+        _active_filter = {"All": "all", "Today": "today", "This Week": "week"}[value]
+        _show_list_view(content, category=_active_tab)
+
+    tab_bar.configure(command=on_tab_change)
+    filter_bar.configure(command=on_filter_change)
+
+    _show_list_view(content, category=_active_tab)
