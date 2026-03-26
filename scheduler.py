@@ -151,9 +151,10 @@ def _compute_next_cron_fire(task: dict) -> datetime | None:
         # Rough check: if today is the right day but time hasn't passed yet, go back 7 days
         if last_fire > now:
             last_fire -= timedelta(days=7)
-        # Don't fire overdue for tasks that haven't had their first occurrence yet
-        start_date = task.get("start_date")
-        if start_date and last_fire.date() < date.fromisoformat(start_date):
+        # Don't fire overdue for tasks that haven't had their first occurrence yet.
+        # If start_date is missing (old task), treat as created today — don't fire.
+        start_date = task.get("start_date") or date.today().isoformat()
+        if last_fire.date() < date.fromisoformat(start_date):
             return None
         return last_fire
     elif t in ("daily", "weekly", "quarterly"):

@@ -35,6 +35,7 @@ if __name__ == "__main__":
     tk_proc.start()
 
     time.sleep(1.5)  # Give child process time to initialize before overdue reminders fire
+    tk_host.enqueue("show")  # Auto-open dashboard on startup
 
     scheduler = ReminderScheduler(store)
     scheduler.start()
