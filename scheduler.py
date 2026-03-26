@@ -81,9 +81,12 @@ class ReminderScheduler:
             trigger = CronTrigger(day_of_week=dow, hour=hour, minute=minute)
         elif t == "daily":
             trigger = CronTrigger(hour=hour, minute=minute)
-        elif t in ("weekly", "quarterly"):
-            # Fire daily at the task's configured time for progress checks
-            trigger = CronTrigger(hour=hour, minute=minute)
+        elif t == "weekly":
+            dow = _DOW_MAP.get(task.get("day_of_week", 0), "mon")
+            trigger = CronTrigger(day_of_week=dow, hour=hour, minute=minute)
+        elif t == "quarterly":
+            check_in_dow = _DOW_MAP.get(task.get("check_in_dow", 0), "mon")
+            trigger = CronTrigger(day_of_week=check_in_dow, hour=hour, minute=minute)
         else:
             log.warning("Unknown task type %r — skipping job registration", t)
             return
@@ -161,5 +164,9 @@ def _compute_next_cron_fire(task: dict) -> datetime | None:
         candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if candidate > now:
             candidate -= timedelta(days=1)
+        # Don't fire overdue if task was created today or start_date unknown
+        start_date = task.get("start_date") or date.today().isoformat()
+        if candidate.date() < date.fromisoformat(start_date):
+            return None
         return candidate
     return None
