@@ -19,7 +19,8 @@ def run_tk(cmd_queue, resp_queue) -> None:
 
     # Store root so panel.py can access it via get_root()
     _host._root = root
-    # Wire resp_queue so send_to_main() works in the child process
+    # Wire both queues so enqueue() and send_to_main() work in the child process
+    _host.init(cmd_queue)
     _host.init_resp(resp_queue)
 
     def _poll() -> None:

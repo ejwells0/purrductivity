@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -151,6 +151,10 @@ def _compute_next_cron_fire(task: dict) -> datetime | None:
         # Rough check: if today is the right day but time hasn't passed yet, go back 7 days
         if last_fire > now:
             last_fire -= timedelta(days=7)
+        # Don't fire overdue for tasks that haven't had their first occurrence yet
+        start_date = task.get("start_date")
+        if start_date and last_fire.date() < date.fromisoformat(start_date):
+            return None
         return last_fire
     elif t in ("daily", "weekly", "quarterly"):
         candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
