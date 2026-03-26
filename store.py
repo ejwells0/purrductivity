@@ -35,6 +35,7 @@ class TaskStore:
             "snoozed_until": None,
             "last_done": None,
             "paused": False,
+            "category": "personal",
             **fields,
         }
         with self._lock:
@@ -79,6 +80,16 @@ class TaskStore:
                 Query().id == task_id,
             )
 
+    def update_task(self, task_id: str, **fields) -> None:
+        """Update specified fields on a task. Preserves all other fields."""
+        with self._lock:
+            self._tasks.update(fields, Query().id == task_id)
+
+    def delete_task(self, task_id: str) -> None:
+        """Permanently remove a task from the store."""
+        with self._lock:
+            self._tasks.remove(Query().id == task_id)
+
     def clear_snooze(self, task_id: str) -> None:
         """Clear snoozed_until without incrementing count (used on re-fire)."""
         with self._lock:
@@ -110,8 +121,9 @@ def is_behind(task: dict, today: date) -> bool:
     """Return True if task is a goal type and actual progress < expected progress."""
     if task["type"] == "weekly":
         expected = weekly_expected_fraction(today) * task["weekly_target"]
+        return task["completed_count"] < expected
     elif task["type"] == "quarterly":
-        expected = quarterly_expected_fraction(today) * task["total_target"]
+        expected = quarterly_expected_fraction(today) * 100
+        return task["progress"] < expected
     else:
         return False
-    return task["completed_count"] < expected
