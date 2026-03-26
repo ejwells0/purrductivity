@@ -224,3 +224,52 @@ def test_concurrent_writes_no_corruption(tmp_path):
 
     assert errors == [], f"Concurrent write errors: {errors}"
     store.close()
+
+
+def test_update_task_sets_paused_true(tmp_path):
+    """update_task(paused=True) persists to store."""
+    from store import TaskStore
+    store = TaskStore(db_path=tmp_path / "tasks.db")
+    task_id = store.add_task(type="daily", name="Habit", hour=8, minute=0, start_date="2026-03-25")
+    store.update_task(task_id, paused=True)
+    task = store.get_task(task_id)
+    assert task["paused"] is True
+    store.close()
+
+
+def test_update_task_sets_paused_false(tmp_path):
+    """update_task(paused=False) after True restores paused=False."""
+    from store import TaskStore
+    store = TaskStore(db_path=tmp_path / "tasks.db")
+    task_id = store.add_task(type="daily", name="Habit", hour=8, minute=0, start_date="2026-03-25")
+    store.update_task(task_id, paused=True)
+    store.update_task(task_id, paused=False)
+    task = store.get_task(task_id)
+    assert task["paused"] is False
+    store.close()
+
+
+def test_get_active_tasks_excludes_paused(tmp_path):
+    """get_active_tasks does not include tasks with paused=True."""
+    from store import TaskStore
+    store = TaskStore(db_path=tmp_path / "tasks.db")
+    id1 = store.add_task(type="daily", name="Active", hour=8, minute=0, start_date="2026-03-25")
+    id2 = store.add_task(type="daily", name="Paused", hour=9, minute=0, start_date="2026-03-25")
+    store.update_task(id2, paused=True)
+    active = store.get_active_tasks()
+    active_ids = [t["id"] for t in active]
+    assert id1 in active_ids
+    assert id2 not in active_ids
+    store.close()
+
+
+def test_is_behind_quarterly_uses_progress_field(tmp_path):
+    """is_behind for quarterly uses task['progress'] (0-100) not completed_count/total_target."""
+    from datetime import date
+    from store import is_behind
+    # Q2 2026 start: quarterly_expected_fraction ≈ 0.077 → expected% ≈ 7.7
+    q2_start = date(2026, 4, 1)
+    behind_task = {"type": "quarterly", "progress": 5}   # 5 < 7.7 → behind
+    on_track_task = {"type": "quarterly", "progress": 95}  # 95 >= 7.7 → not behind
+    assert is_behind(behind_task, q2_start) is True
+    assert is_behind(on_track_task, q2_start) is False
