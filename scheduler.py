@@ -166,7 +166,7 @@ def _compute_next_cron_fire(task: dict) -> datetime | None:
             candidate -= timedelta(days=1)
         # Don't fire overdue if task was created today or start_date unknown
         start_date = task.get("start_date") or date.today().isoformat()
-        if candidate.date() < date.fromisoformat(start_date):
+        if candidate.date() <= date.fromisoformat(start_date):
             return None
         return candidate
     return None
