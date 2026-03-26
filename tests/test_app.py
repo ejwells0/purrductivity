@@ -9,5 +9,5 @@ def test_app_init():
     from app import PurrductivityApp  # noqa: PLC0415
     # scheduler and store are used only at runtime (badge timer + get_active_tasks);
     # passing None is safe for construction-only test.
-    instance = PurrductivityApp(scheduler=None, store=None)
-    assert instance.icon == "assets/cat_icon.png"
+    instance = PurrductivityApp(scheduler=None, store=None, resp_queue=None)
+    assert instance.icon.endswith("assets/cat_icon.png")

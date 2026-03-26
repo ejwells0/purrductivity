@@ -135,19 +135,19 @@ def test_is_behind_weekly_one_below_threshold_behind():
 # ---------------------------------------------------------------------------
 
 def test_is_behind_quarterly_at_threshold_not_behind():
-    """total_target=52, completed=4, first week Q1 → expected=4.0 → NOT behind."""
+    """progress=8 (%), first week Q1 → expected=1/13*100≈7.69 → NOT behind (8 >= 7.69)."""
     from store import is_behind
-    # week_in_quarter=1, fraction=1/13; 52 * (1/13) = 4.0
+    # week_in_quarter=1, fraction=1/13; expected_pct = 1/13*100 ≈ 7.69
     jan1 = date(2026, 1, 1)
-    task = {"type": "quarterly", "total_target": 52, "completed_count": 4}
+    task = {"type": "quarterly", "progress": 8}
     assert is_behind(task, jan1) is False
 
 
 def test_is_behind_quarterly_one_below_threshold_behind():
-    """total_target=52, completed=3, first week Q1 → expected=4.0 → behind."""
+    """progress=7 (%), first week Q1 → expected≈7.69 → behind (7 < 7.69)."""
     from store import is_behind
     jan1 = date(2026, 1, 1)
-    task = {"type": "quarterly", "total_target": 52, "completed_count": 3}
+    task = {"type": "quarterly", "progress": 7}
     assert is_behind(task, jan1) is True
 
 
