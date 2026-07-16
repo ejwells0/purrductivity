@@ -85,22 +85,18 @@ class ReminderScheduler:
 
         if t == "scheduled":
             dow = _DOW_MAP[task["day_of_week"]]
-            end_date_str = task.get("end_date", "")
-            end_dt = datetime.fromisoformat(end_date_str + "T23:59:59") if end_date_str else None
+            end_dt = _parse_end_dt(task.get("end_date", ""))
             trigger = CronTrigger(day_of_week=dow, hour=hour, minute=minute, end_date=end_dt)
         elif t == "daily":
-            end_date_str = task.get("end_date", "")
-            end_dt = datetime.fromisoformat(end_date_str + "T23:59:59") if end_date_str else None
+            end_dt = _parse_end_dt(task.get("end_date", ""))
             trigger = CronTrigger(hour=hour, minute=minute, end_date=end_dt)
         elif t == "monthly":
             day_of_month = task.get("day_of_month", 1)
-            end_date_str = task.get("end_date", "")
-            end_dt = datetime.fromisoformat(end_date_str + "T23:59:59") if end_date_str else None
+            end_dt = _parse_end_dt(task.get("end_date", ""))
             trigger = CronTrigger(day=day_of_month, hour=hour, minute=minute, end_date=end_dt)
         elif t == "weekly":
             dow = _DOW_MAP.get(task.get("day_of_week", 0), "mon")
-            end_date_str = task.get("end_date", "")
-            end_dt = datetime.fromisoformat(end_date_str + "T23:59:59") if end_date_str else None
+            end_dt = _parse_end_dt(task.get("end_date", ""))
             trigger = CronTrigger(day_of_week=dow, hour=hour, minute=minute, end_date=end_dt)
         elif t == "quarterly":
             if not task.get("check_in_enabled", False):
@@ -149,7 +145,13 @@ class ReminderScheduler:
         self._add_snooze_job(task_id, fire_at)
 
     def reschedule_task(self, task_id: str) -> None:
-        """Re-register the cron job for a task after its fields have been edited."""
+        """Re-register the cron job for a task after its fields have been edited.
+
+        Cancels existing jobs first: if the new config registers no job (e.g. the
+        task was edited into a past one-time), the old recurring job must not
+        keep firing.
+        """
+        self.cancel_job(task_id)
         task = self._store.get_task(task_id)
         if task is None or task.get("paused"):
             return
@@ -162,6 +164,20 @@ class ReminderScheduler:
                 self._scheduler.remove_job(job_id)
             except Exception:
                 pass
+
+
+def _parse_end_dt(end_date_str: str) -> datetime | None:
+    """Parse a task's end_date into an end-of-day datetime.
+    Returns None for empty or malformed values — a bad string saved in the DB
+    must never crash job registration (and with it, app startup).
+    """
+    if not end_date_str:
+        return None
+    try:
+        return datetime.fromisoformat(end_date_str + "T23:59:59")
+    except (ValueError, TypeError):
+        log.warning("Ignoring malformed end_date %r", end_date_str)
+        return None
 
 
 # ── Module-level callback (must be picklable for APScheduler) ─────────

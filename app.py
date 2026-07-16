@@ -68,9 +68,17 @@ class PurrductivityApp(rumps.App):
 
     def _drain_resp_queue(self) -> None:
         """Drain commands from the child process. Called every 500ms from _apply_badge."""
-        try:
-            while True:
+        import logging  # noqa: PLC0415
+        import queue as _queue  # noqa: PLC0415
+        while True:
+            try:
                 msg = self._resp_queue.get_nowait()
+            except _queue.Empty:
+                break
+            except Exception:
+                break
+            # One malformed message must not drop the rest of the batch
+            try:
                 cmd = msg.get("cmd", "")
                 if cmd == "schedule_snooze":
                     self._scheduler.schedule_snooze(msg["task_id"], msg["minutes"])
@@ -82,8 +90,8 @@ class PurrductivityApp(rumps.App):
                     self._scheduler.cancel_job(msg["task_id"])
                 elif cmd == "badge_clear":
                     request_badge_update(False)
-        except Exception:
-            pass  # Empty queue raises queue.Empty — swallow it
+            except Exception:
+                logging.getLogger(__name__).warning("Bad IPC message: %r", msg)
 
     def _apply_badge(self, _sender) -> None:
         """Main-thread timer: apply any pending badge state change.

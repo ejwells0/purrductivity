@@ -127,7 +127,7 @@ def quarterly_expected_fraction(today: date) -> float:
 def is_behind(task: dict, today: date) -> bool:
     """Return True if task is a goal type and actual progress < expected progress."""
     if task["type"] == "weekly":
-        target = task["weekly_target"]
+        target = task.get("weekly_target", 1)
         if target == 1:
             # Binary task (once a week): only behind if the scheduled day has arrived
             # this week and it hasn't been done yet.
@@ -144,9 +144,9 @@ def is_behind(task: dict, today: date) -> bool:
                     pass
             return True
         expected = weekly_expected_fraction(today) * target
-        return task["completed_count"] < expected
+        return task.get("completed_count", 0) < expected
     elif task["type"] == "quarterly":
         expected = quarterly_expected_fraction(today) * 100
-        return task["progress"] < expected
+        return task.get("progress", 0) < expected
     else:
         return False

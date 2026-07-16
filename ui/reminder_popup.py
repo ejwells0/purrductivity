@@ -53,7 +53,9 @@ _FRIENDLY_MESSAGES = [
 def _get_tone_message(task: dict, today=None) -> str:
     """Return formatted tone message for a goal-type task."""
     from datetime import date as _date  # noqa: PLC0415
-    from store import weekly_expected_fraction, quarterly_expected_fraction  # noqa: PLC0415
+    from store import (  # noqa: PLC0415
+        is_behind, weekly_expected_fraction, quarterly_expected_fraction,
+    )
 
     if today is None:
         today = _date.today()
@@ -64,16 +66,15 @@ def _get_tone_message(task: dict, today=None) -> str:
         actual = task.get("completed_count", 0)
         expected = round(weekly_expected_fraction(today) * target)
         fmt = {"name": name, "actual": actual, "target": target, "expected": expected}
-        # Inline behind check: use same logic as is_behind() weekly branch
-        behind = actual < weekly_expected_fraction(today) * target
+        # Same logic as the task card, incl. binary-weekly scheduled-day handling
+        behind = is_behind(task, today)
         pool = _HARSH_MESSAGES if behind else _FRIENDLY_MESSAGES
 
     elif task["type"] == "quarterly":
         actual = task.get("progress", 0)          # 0-100 %
         expected = round(quarterly_expected_fraction(today) * 100)
         fmt = {"name": name, "actual": actual, "target": 100, "expected": expected}
-        # Inline quarterly behind check (uses progress, not completed_count)
-        behind = actual < quarterly_expected_fraction(today) * 100
+        behind = is_behind(task, today)
         pool = _HARSH_MESSAGES if behind else _FRIENDLY_MESSAGES
 
     else:

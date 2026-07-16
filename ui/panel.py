@@ -263,14 +263,23 @@ def _fires_today(task: dict, today: _date) -> bool:
 def _fires_this_week(task: dict, today: _date) -> bool:
     from datetime import timedelta as _td  # noqa: PLC0415
     t = task.get("type", "")
+    end_d = None
+    end_str = task.get("end_date")
+    if end_str:
+        try:
+            end_d = _date.fromisoformat(end_str)
+        except (ValueError, TypeError):
+            pass
     if t == "daily":
-        return True
+        return end_d is None or end_d >= today
     if t in ("scheduled", "weekly"):
         dow = task.get("day_of_week")
         if dow is None:
             return False
         week_start = today - _td(days=today.weekday())
         task_date = week_start + _td(days=dow)
+        if end_d is not None and task_date > end_d:
+            return False
         start_str = task.get("start_date")
         if start_str:
             try:
@@ -288,7 +297,7 @@ def _fires_this_week(task: dict, today: _date) -> bool:
         for offset in range(7):
             d = week_start + _td(days=offset)
             if d.day == dom:
-                return True
+                return end_d is None or d <= end_d
         return False
     if t == "quarterly":
         return task.get("check_in_enabled", False)
@@ -1799,6 +1808,15 @@ def _render_fields(field_frame: ctk.CTkFrame,
     return fields
 
 
+def _valid_iso_date(val: str) -> bool:
+    """Return True if val parses as an ISO date (YYYY-MM-DD)."""
+    try:
+        _date.fromisoformat(val)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
 def _show_error(parent: ctk.CTkFrame, message: str) -> None:
     """Show a temporary error label in the parent frame."""
     from ui.styles import SMALL_FONT  # noqa: PLC0415
@@ -1834,6 +1852,9 @@ def _save_task(parent: ctk.CTkFrame, fields: dict,
         start_date_str = start_date_raw.get().strip() or datetime.now().date().isoformat()
     else:
         start_date_str = datetime.now().date().isoformat()
+    if not _valid_iso_date(start_date_str):
+        _show_error(error_frame, "Enter a valid date (YYYY-MM-DD).")
+        return
 
     notes_entry = fields.get("notes", None)
     notes_val = notes_entry.get().strip() if notes_entry else ""
@@ -1857,6 +1878,9 @@ def _save_task(parent: ctk.CTkFrame, fields: dict,
     end_date_str = ""
     if is_recurring and fields.get("end_date_enabled") and fields["end_date_enabled"].get():
         end_date_str = fields["end_date"].get().strip() if fields.get("end_date") else ""
+    if end_date_str and not _valid_iso_date(end_date_str):
+        _show_error(error_frame, "Enter a valid end date (YYYY-MM-DD).")
+        return
 
     from ui.tk_host import send_to_main  # noqa: PLC0415
 
@@ -1927,6 +1951,8 @@ def _save_task(parent: ctk.CTkFrame, fields: dict,
             end_date=end_date_str,
             notes=notes_val,
             category=category,
+            is_rock=is_rock,
+            is_rock_report=is_rock_report,
         )
 
     # Register the new task with the scheduler immediately
@@ -1959,6 +1985,9 @@ def _update_task(parent: ctk.CTkFrame, task_id: str, fields: dict,
         start_date_str = start_date_raw.get().strip() or datetime.now().date().isoformat()
     else:
         start_date_str = datetime.now().date().isoformat()
+    if not _valid_iso_date(start_date_str):
+        _show_error(error_frame, "Enter a valid date (YYYY-MM-DD).")
+        return
 
     notes_entry = fields.get("notes")
     notes_val = notes_entry.get().strip() if notes_entry else ""
@@ -1981,6 +2010,9 @@ def _update_task(parent: ctk.CTkFrame, task_id: str, fields: dict,
     end_date_str = ""
     if is_recurring and fields.get("end_date_enabled") and fields["end_date_enabled"].get():
         end_date_str = fields["end_date"].get().strip() if fields.get("end_date") else ""
+    if end_date_str and not _valid_iso_date(end_date_str):
+        _show_error(error_frame, "Enter a valid end date (YYYY-MM-DD).")
+        return
 
     store = _get_store()
     updates: dict = {"name": name_val, "notes": notes_val,
@@ -1993,6 +2025,7 @@ def _update_task(parent: ctk.CTkFrame, task_id: str, fields: dict,
             "due_date": start_date_str,
             "hour": hour,
             "minute": minute,
+            "end_date": "",
         })
 
     elif freq == "Daily":
