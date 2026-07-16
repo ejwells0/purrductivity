@@ -53,49 +53,42 @@ def test_weekly_fraction_saturday():
 # ---------------------------------------------------------------------------
 
 def test_quarterly_fraction_first_day_q1():
-    """First day of Q1 (Jan 1): week_in_quarter=1, returns 1/13."""
+    """First day of Q1 (Jan 1): (days_elapsed + 1) / total_days = 1/90."""
     from store import quarterly_expected_fraction
+    # Q1 2026 = Jan 1 .. Mar 31 = 90 days (2026 is not a leap year)
     jan1 = date(2026, 1, 1)
     result = quarterly_expected_fraction(jan1)
-    assert abs(result - 1 / 13) < 1e-9
+    assert abs(result - 1 / 90) < 1e-9
 
 
 def test_quarterly_fraction_near_end_of_q1():
-    """Near end of Q1 (Mar 22, day 80): week_in_quarter=12, returns 12/13."""
+    """Near end of Q1 (Mar 22, day 80): returns (80 + 1) / 90 = 81/90."""
     from store import quarterly_expected_fraction
-    # Mar 22 2026: days from Jan 1 = 80; week_in_quarter = 80//7 + 1 = 12
+    # Mar 22 2026: days elapsed since Jan 1 = 80; fraction = (80 + 1) / 90
     mar22 = date(2026, 3, 22)
     days_elapsed = (mar22 - date(2026, 1, 1)).days  # should be 80
-    week_in_quarter = days_elapsed // 7 + 1  # should be 12
-    assert week_in_quarter == 12
+    assert days_elapsed == 80
     result = quarterly_expected_fraction(mar22)
-    assert abs(result - 12 / 13) < 1e-9
+    assert abs(result - 81 / 90) < 1e-9
 
 
 def test_quarterly_fraction_capped_at_one():
-    """Any date >= 13 weeks into quarter: returns exactly 1.0 (capped by min())."""
+    """Last day of the quarter: returns exactly 1.0 (capped by min())."""
     from store import quarterly_expected_fraction
-    # week 13 or beyond: min(week_in_quarter/13, 1.0) == 1.0
-    # 13 weeks = 91 days from quarter start
-    # Q1 2026 start = Jan 1; Jan 1 + 91 days = Apr 2 (which is Q2 already)
-    # Use Q2: Apr 1 + 91 days = Jul 1 (still within Q2's 91-day span for this check)
-    # More precisely: find a date where week_in_quarter >= 13
-    # Q1 2026: quarter_start = Jan 1; we need days_elapsed >= 84 (12*7=84, week=13)
-    # Mar 26 = day 85 → week = 85//7+1 = 13
-    mar26 = date(2026, 3, 26)
-    days_elapsed = (mar26 - date(2026, 1, 1)).days
-    week_in_quarter = days_elapsed // 7 + 1
-    assert week_in_quarter >= 13
-    result = quarterly_expected_fraction(mar26)
+    # Q1 2026 last day = Mar 31: days_elapsed = 89, (89 + 1) / 90 = 1.0
+    mar31 = date(2026, 3, 31)
+    days_elapsed = (mar31 - date(2026, 1, 1)).days
+    assert days_elapsed == 89
+    result = quarterly_expected_fraction(mar31)
     assert result == 1.0
 
 
 def test_quarterly_fraction_first_day_q2():
-    """First day of Q2 (Apr 1): returns 1/13."""
+    """First day of Q2 (Apr 1): returns 1/91 (Q2 2026 = Apr 1 .. Jun 30 = 91 days)."""
     from store import quarterly_expected_fraction
     apr1 = date(2026, 4, 1)
     result = quarterly_expected_fraction(apr1)
-    assert abs(result - 1 / 13) < 1e-9
+    assert abs(result - 1 / 91) < 1e-9
 
 
 def test_quarterly_fraction_never_exceeds_one():
@@ -135,19 +128,19 @@ def test_is_behind_weekly_one_below_threshold_behind():
 # ---------------------------------------------------------------------------
 
 def test_is_behind_quarterly_at_threshold_not_behind():
-    """progress=8 (%), first week Q1 → expected=1/13*100≈7.69 → NOT behind (8 >= 7.69)."""
+    """progress=2 (%), first day Q1 → expected=1/90*100≈1.11 → NOT behind (2 >= 1.11)."""
     from store import is_behind
-    # week_in_quarter=1, fraction=1/13; expected_pct = 1/13*100 ≈ 7.69
+    # days_elapsed=0, fraction=1/90; expected_pct = 1/90*100 ≈ 1.11
     jan1 = date(2026, 1, 1)
-    task = {"type": "quarterly", "progress": 8}
+    task = {"type": "quarterly", "progress": 2}
     assert is_behind(task, jan1) is False
 
 
 def test_is_behind_quarterly_one_below_threshold_behind():
-    """progress=7 (%), first week Q1 → expected≈7.69 → behind (7 < 7.69)."""
+    """progress=1 (%), first day Q1 → expected≈1.11 → behind (1 < 1.11)."""
     from store import is_behind
     jan1 = date(2026, 1, 1)
-    task = {"type": "quarterly", "progress": 7}
+    task = {"type": "quarterly", "progress": 1}
     assert is_behind(task, jan1) is True
 
 

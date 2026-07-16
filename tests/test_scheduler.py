@@ -59,6 +59,8 @@ def _quarterly_task(task_id="task-4"):
         "type": "quarterly",
         "name": "OKRs",
         "total_target": 52,
+        "check_in_enabled": True,
+        "check_in_dow": 0,
         "hour": 9,
         "minute": 0,
         "snoozed_until": None,
