@@ -35,3 +35,8 @@ pytest
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Credits
+
+Cat artwork is from [Noto Emoji](https://github.com/googlefonts/noto-emoji) by Google,
+used under the [Apache License 2.0](https://github.com/googlefonts/noto-emoji/blob/main/LICENSE).
