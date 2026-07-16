@@ -22,6 +22,18 @@ from app import PurrductivityApp
 
 
 if __name__ == "__main__":
+    # Set bundle display name before NSApplication initializes so the Dock shows
+    # "Purrductivity" instead of "python3.13".
+    try:
+        from Foundation import NSBundle, NSProcessInfo  # noqa: PLC0415
+        _info = NSBundle.mainBundle().infoDictionary()
+        if _info is not None:
+            _info["CFBundleName"] = "Purrductivity"
+            _info["CFBundleDisplayName"] = "Purrductivity"
+        NSProcessInfo.processInfo().setProcessName_("Purrductivity")
+    except Exception:
+        pass
+
     mp.set_start_method("spawn", force=True)
 
     cmd_queue = mp.Queue()
@@ -41,3 +53,11 @@ if __name__ == "__main__":
     scheduler.start()
 
     PurrductivityApp(scheduler, store, resp_queue).run()
+
+    # Graceful shutdown: stop scheduler, terminate child process, close queues, close store
+    scheduler.stop()
+    tk_proc.terminate()
+    tk_proc.join(timeout=2)
+    cmd_queue.close()
+    resp_queue.close()
+    store.close()

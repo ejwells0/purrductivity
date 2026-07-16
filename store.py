@@ -4,7 +4,7 @@
 #         Pitfall 2 (threading lock), Pitfall 5 (Query() reuse), Pitfall 6 (snooze)
 import threading
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from tinydb import TinyDB, Query
@@ -109,18 +109,41 @@ def weekly_expected_fraction(today: date) -> float:
 
 
 def quarterly_expected_fraction(today: date) -> float:
-    """Returns fraction of current quarter elapsed on a 13-week basis."""
+    """Returns fraction of current calendar quarter elapsed.
+    Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec.
+    Uses (days_elapsed + 1) / total_days so day 1 is non-zero."""
     quarter_start_month = ((today.month - 1) // 3) * 3 + 1
     quarter_start = date(today.year, quarter_start_month, 1)
+    next_quarter_month = quarter_start_month + 3
+    if next_quarter_month > 12:
+        quarter_end = date(today.year + 1, 1, 1)
+    else:
+        quarter_end = date(today.year, next_quarter_month, 1)
+    total_days = (quarter_end - quarter_start).days
     days_elapsed = (today - quarter_start).days
-    week_in_quarter = days_elapsed // 7 + 1
-    return min(week_in_quarter / 13, 1.0)
+    return min((days_elapsed + 1) / total_days, 1.0)
 
 
 def is_behind(task: dict, today: date) -> bool:
     """Return True if task is a goal type and actual progress < expected progress."""
     if task["type"] == "weekly":
-        expected = weekly_expected_fraction(today) * task["weekly_target"]
+        target = task["weekly_target"]
+        if target == 1:
+            # Binary task (once a week): only behind if the scheduled day has arrived
+            # this week and it hasn't been done yet.
+            dow = task.get("day_of_week", 6)
+            if today.weekday() < dow:
+                return False  # scheduled day hasn't arrived yet
+            last_done = task.get("last_done")
+            if last_done:
+                try:
+                    week_start = today - timedelta(days=today.weekday())
+                    if datetime.fromisoformat(last_done).date() >= week_start:
+                        return False  # done this week
+                except (ValueError, TypeError):
+                    pass
+            return True
+        expected = weekly_expected_fraction(today) * target
         return task["completed_count"] < expected
     elif task["type"] == "quarterly":
         expected = quarterly_expected_fraction(today) * 100

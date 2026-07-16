@@ -1,8 +1,11 @@
 # ui/tk_process.py
 # Tkinter child process entry point.
 # Runs on the child process's main thread — no conflict with rumps.
+import os
 import customtkinter as ctk
 import ui.tk_host as _host
+
+_ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "cat_icon.png")
 
 
 def run_tk(cmd_queue, resp_queue) -> None:
@@ -16,6 +19,46 @@ def run_tk(cmd_queue, resp_queue) -> None:
 
     root = ctk.CTk()
     root.withdraw()
+
+    # Set dock icon: cat on pastel pink rounded square, standard 1024px canvas
+    try:
+        import tempfile  # noqa: PLC0415
+        from PIL import Image, ImageDraw  # noqa: PLC0415
+        from AppKit import NSApplication, NSImage  # noqa: PLC0415
+        from Foundation import NSBundle  # noqa: PLC0415
+
+        # Set process display name
+        info = NSBundle.mainBundle().infoDictionary()
+        if info is not None:
+            info["CFBundleName"] = "Purrductivity"
+            info["CFBundleDisplayName"] = "Purrductivity"
+
+        # 1024x1024 canvas — standard macOS icon size, matches dock sizing of other apps
+        size = 1024
+        outer_pad = 80         # transparent outer margin — matches macOS icon grid sizing
+        sq = size - outer_pad * 2
+        radius = int(sq * 0.225)  # standard macOS squircle-ish radius
+
+        canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        sq_img = Image.new("RGBA", (sq, sq), (0, 0, 0, 0))
+        ImageDraw.Draw(sq_img).rounded_rectangle([0, 0, sq - 1, sq - 1], radius=radius, fill="#F0C0C8")
+        canvas.paste(sq_img, (outer_pad, outer_pad), sq_img.split()[3])
+
+        cat = Image.open(_ICON_PATH).convert("RGBA")
+        inner_pad = int(sq * 0.12)
+        cat_size = sq - inner_pad * 2
+        cat = cat.resize((cat_size, cat_size), Image.LANCZOS)
+        canvas.paste(cat, (outer_pad + inner_pad, outer_pad + inner_pad), cat.split()[3])
+
+        _fd, _tmp = tempfile.mkstemp(suffix=".png")
+        os.close(_fd)
+        canvas.save(_tmp)
+
+        _img = NSImage.alloc().initWithContentsOfFile_(_tmp)
+        if _img:
+            NSApplication.sharedApplication().setApplicationIconImage_(_img)
+    except Exception:
+        pass
 
     # Store root so panel.py can access it via get_root()
     _host._root = root
@@ -54,8 +97,12 @@ def run_tk(cmd_queue, resp_queue) -> None:
                 else:
                     import logging  # noqa: PLC0415
                     logging.getLogger(__name__).warning("Unknown IPC command: %r", cmd)
-        except Exception:
-            pass
+        except Exception as _e:
+            import queue as _q, logging, traceback  # noqa: PLC0415
+            if isinstance(_e, _q.Empty):
+                pass  # Normal — queue is empty, nothing to do
+            else:
+                logging.getLogger(__name__).error("IPC poll error:\n%s", traceback.format_exc())
         root.after(100, _poll)
 
     root.after(100, _poll)

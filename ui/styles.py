@@ -19,6 +19,7 @@ CAT_OUTLINE   = "#C4A882"   # Cat linework / whiskers
 BADGE_DOT     = "#E8748A"   # Pending-reminder dot on menu bar icon (TONE-04)
 DESTRUCTIVE   = "#C0392B"   # Phase 3 delete/remove actions — defined now, unused in Phase 2
 MUTED_TEXT    = "#8A9480"   # Muted sage — paused task text (Phase 3)
+WORK_ACCENT   = "#B8D4F0"   # Soft sky blue — work tasks in calendar view
 
 # ── Fonts ─────────────────────────────────────────────────────────────────────
 _TITLE_FONT = None

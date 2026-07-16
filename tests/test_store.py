@@ -169,12 +169,12 @@ def test_weekly_expected_fraction_sunday(tmp_path):
 
 
 def test_quarterly_expected_fraction_first_day_q2(tmp_path):
-    """First day of Q2 2026 (2026-04-01) returns value > 0 and <= 1/13."""
+    """First day of Q2 2026 (2026-04-01) returns a small positive fraction (1/91 of the quarter)."""
     from store import quarterly_expected_fraction
     first_day_q2 = date(2026, 4, 1)
     result = quarterly_expected_fraction(first_day_q2)
     assert result > 0
-    assert result <= 1 / 13
+    assert result < 0.02  # Q2 has 91 days; day 1 → 1/91 ≈ 0.011
 
 
 def test_is_behind_weekly_behind(tmp_path):
@@ -198,6 +198,45 @@ def test_is_behind_scheduled_never_behind(tmp_path):
     from store import is_behind
     task = {"type": "scheduled", "name": "Stand-up", "completed_count": 0}
     assert is_behind(task, date(2026, 3, 25)) is False
+
+
+def test_is_behind_binary_weekly_before_scheduled_day(tmp_path):
+    """Binary weekly (target=1) task is NOT behind before the scheduled day arrives."""
+    from store import is_behind
+    # Task fires on Friday (dow=4); today is Thursday (2026-03-26, weekday=3)
+    task = {"type": "weekly", "weekly_target": 1, "day_of_week": 4, "completed_count": 0}
+    thursday = date(2026, 3, 26)
+    assert is_behind(task, thursday) is False
+
+
+def test_is_behind_binary_weekly_on_scheduled_day_not_done(tmp_path):
+    """Binary weekly (target=1) task IS behind when today is the scheduled day and not done."""
+    from store import is_behind
+    # Task fires on Thursday (dow=3); today IS Thursday (2026-03-26, weekday=3)
+    task = {"type": "weekly", "weekly_target": 1, "day_of_week": 3, "completed_count": 0,
+            "last_done": None}
+    thursday = date(2026, 3, 26)
+    assert is_behind(task, thursday) is True
+
+
+def test_is_behind_binary_weekly_after_scheduled_day_not_done(tmp_path):
+    """Binary weekly (target=1) task IS behind when the scheduled day has passed and not done."""
+    from store import is_behind
+    # Task fires on Friday (dow=4); today is Saturday (2026-03-28, weekday=5)
+    task = {"type": "weekly", "weekly_target": 1, "day_of_week": 4, "completed_count": 0,
+            "last_done": None}
+    saturday = date(2026, 3, 28)
+    assert is_behind(task, saturday) is True
+
+
+def test_is_behind_binary_weekly_done_this_week(tmp_path):
+    """Binary weekly (target=1) task is NOT behind when done this week."""
+    from store import is_behind
+    # Task done on Friday; checked on Saturday — still not behind
+    task = {"type": "weekly", "weekly_target": 1, "day_of_week": 4, "completed_count": 1,
+            "last_done": "2026-03-27T10:00:00"}  # Friday
+    saturday = date(2026, 3, 28)
+    assert is_behind(task, saturday) is False
 
 
 def test_concurrent_writes_no_corruption(tmp_path):
@@ -267,9 +306,9 @@ def test_is_behind_quarterly_uses_progress_field(tmp_path):
     """is_behind for quarterly uses task['progress'] (0-100) not completed_count/total_target."""
     from datetime import date
     from store import is_behind
-    # Q2 2026 start: quarterly_expected_fraction ≈ 0.077 → expected% ≈ 7.7
-    q2_start = date(2026, 4, 1)
-    behind_task = {"type": "quarterly", "progress": 5}   # 5 < 7.7 → behind
-    on_track_task = {"type": "quarterly", "progress": 95}  # 95 >= 7.7 → not behind
-    assert is_behind(behind_task, q2_start) is True
-    assert is_behind(on_track_task, q2_start) is False
+    # Q2 2026 mid: May 16 → days_elapsed=45, Q2 has 91 days → fraction≈0.506 → expected%≈50.6
+    q2_mid = date(2026, 5, 16)
+    behind_task = {"type": "quarterly", "progress": 40}    # 40 < 50.6 → behind
+    on_track_task = {"type": "quarterly", "progress": 60}  # 60 >= 50.6 → not behind
+    assert is_behind(behind_task, q2_mid) is True
+    assert is_behind(on_track_task, q2_mid) is False

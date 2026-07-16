@@ -7,12 +7,13 @@ import os
 import tempfile
 
 import rumps
+from AppKit import NSApplication, NSImage
 from PIL import Image, ImageDraw
 
 from ui.tk_host import enqueue
 from ui.styles import BADGE_DOT
 
-_BASE_ICON = "assets/cat_icon.png"
+_BASE_ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "cat_icon.png")
 _badge_tmp: str | None = None
 _pending_badge_state: bool = False   # Set from APScheduler thread; read by main thread timer
 
@@ -46,13 +47,17 @@ class PurrductivityApp(rumps.App):
             title="",
             icon=_BASE_ICON,
             quit_button="Quit Purrductivity",
-            template=True,
+            template=False,
         )
         self._scheduler = scheduler
         self._store = store
         self._resp_queue = resp_queue
         self._badge_pending = False
         self.menu = ["Open", None]
+        # Set Dock icon to match the menu bar cat
+        _dock_icon = NSImage.alloc().initWithContentsOfFile_(_BASE_ICON)
+        if _dock_icon:
+            NSApplication.sharedApplication().setApplicationIconImage_(_dock_icon)
         # Poll badge state every 500ms on main thread
         self._badge_timer = rumps.Timer(self._apply_badge, 0.5)
         self._badge_timer.start()
@@ -69,20 +74,33 @@ class PurrductivityApp(rumps.App):
                 cmd = msg.get("cmd", "")
                 if cmd == "schedule_snooze":
                     self._scheduler.schedule_snooze(msg["task_id"], msg["minutes"])
+                elif cmd == "mark_done":
+                    self._store.mark_done(msg["task_id"])
+                elif cmd == "reschedule_task":
+                    self._scheduler.reschedule_task(msg["task_id"])
+                elif cmd == "cancel_job":
+                    self._scheduler.cancel_job(msg["task_id"])
+                elif cmd == "badge_clear":
+                    request_badge_update(False)
         except Exception:
             pass  # Empty queue raises queue.Empty — swallow it
 
     def _apply_badge(self, _sender) -> None:
         """Main-thread timer: apply any pending badge state change.
 
-        Badge is on when a reminder recently fired OR any task is currently snoozed.
-        Polling the store for snoozed tasks covers the case where the child process
-        has cleared snooze via Done — once snoozed_until is None in the DB, the badge
-        turns off without needing a round-trip IPC message.
+        Badge is on when a reminder recently fired OR any task has an overdue snooze.
+        Only past-due snoozes count — future snoozes have no popup yet so the badge
+        would show with nothing for the user to act on.
+        Polling the store covers the case where the child process cleared snooze via
+        Done — once snoozed_until is None in the DB, the badge turns off without a
+        round-trip IPC message.
         """
+        import datetime as _dt  # noqa: PLC0415
         self._drain_resp_queue()
+        now_iso = _dt.datetime.now().isoformat()
         any_snoozed = any(
-            t.get("snoozed_until") for t in self._store.get_active_tasks()
+            t.get("snoozed_until") and t["snoozed_until"] <= now_iso
+            for t in self._store.get_active_tasks()
         )
         new_state = _pending_badge_state or any_snoozed
         if new_state != self._badge_pending:

@@ -29,7 +29,7 @@ class ReminderScheduler:
         self._scheduler = BackgroundScheduler(
             job_defaults={
                 "coalesce": True,
-                "misfire_grace_time": 60,
+                "misfire_grace_time": 300,
                 "max_instances": 1,
             },
             logger=log,
@@ -56,8 +56,13 @@ class ReminderScheduler:
             if task.get("snoozed_until"):
                 fire_at = datetime.fromisoformat(task["snoozed_until"])
                 if fire_at <= now:
-                    # Overdue snooze: fire immediately
+                    # Overdue snooze: clear the stale DB field immediately so the
+                    # badge reflects _pending_badge_state rather than a stale snooze,
+                    # then fire the popup and light the badge.
+                    self._store.clear_snooze(task_id)
                     enqueue("show_reminder", task_id=task_id)
+                    from app import request_badge_update  # noqa: PLC0415
+                    request_badge_update(True)
                 else:
                     self._add_snooze_job(task_id, fire_at)
                 continue  # skip regular cron job while snoozed
@@ -66,6 +71,8 @@ class ReminderScheduler:
             next_fire = _compute_next_cron_fire(task)
             if next_fire and next_fire <= now:
                 enqueue("show_reminder", task_id=task_id)
+                from app import request_badge_update  # noqa: PLC0415
+                request_badge_update(True)
                 # Still register cron job so future fires continue
             self._add_cron_job(task)
 
@@ -78,15 +85,40 @@ class ReminderScheduler:
 
         if t == "scheduled":
             dow = _DOW_MAP[task["day_of_week"]]
-            trigger = CronTrigger(day_of_week=dow, hour=hour, minute=minute)
+            end_date_str = task.get("end_date", "")
+            end_dt = datetime.fromisoformat(end_date_str + "T23:59:59") if end_date_str else None
+            trigger = CronTrigger(day_of_week=dow, hour=hour, minute=minute, end_date=end_dt)
         elif t == "daily":
-            trigger = CronTrigger(hour=hour, minute=minute)
+            end_date_str = task.get("end_date", "")
+            end_dt = datetime.fromisoformat(end_date_str + "T23:59:59") if end_date_str else None
+            trigger = CronTrigger(hour=hour, minute=minute, end_date=end_dt)
+        elif t == "monthly":
+            day_of_month = task.get("day_of_month", 1)
+            end_date_str = task.get("end_date", "")
+            end_dt = datetime.fromisoformat(end_date_str + "T23:59:59") if end_date_str else None
+            trigger = CronTrigger(day=day_of_month, hour=hour, minute=minute, end_date=end_dt)
         elif t == "weekly":
             dow = _DOW_MAP.get(task.get("day_of_week", 0), "mon")
-            trigger = CronTrigger(day_of_week=dow, hour=hour, minute=minute)
+            end_date_str = task.get("end_date", "")
+            end_dt = datetime.fromisoformat(end_date_str + "T23:59:59") if end_date_str else None
+            trigger = CronTrigger(day_of_week=dow, hour=hour, minute=minute, end_date=end_dt)
         elif t == "quarterly":
+            if not task.get("check_in_enabled", False):
+                return  # no recurring popup when check-in is disabled
             check_in_dow = _DOW_MAP.get(task.get("check_in_dow", 0), "mon")
             trigger = CronTrigger(day_of_week=check_in_dow, hour=hour, minute=minute)
+        elif t == "one_time":
+            due_str = task.get("due_date")
+            if not due_str:
+                return
+            try:
+                due_d = date.fromisoformat(due_str)
+                fire_dt = datetime(due_d.year, due_d.month, due_d.day, hour, minute)
+            except (ValueError, TypeError):
+                return
+            if fire_dt <= datetime.now():
+                return  # already past
+            trigger = DateTrigger(run_date=fire_dt)
         else:
             log.warning("Unknown task type %r — skipping job registration", t)
             return
@@ -116,6 +148,13 @@ class ReminderScheduler:
         fire_at = datetime.now() + timedelta(minutes=minutes)
         self._add_snooze_job(task_id, fire_at)
 
+    def reschedule_task(self, task_id: str) -> None:
+        """Re-register the cron job for a task after its fields have been edited."""
+        task = self._store.get_task(task_id)
+        if task is None or task.get("paused"):
+            return
+        self._add_cron_job(task)
+
     def cancel_job(self, task_id: str) -> None:
         """Remove regular and snooze jobs for a task (used on done/delete)."""
         for job_id in (f"task_{task_id}", f"snooze_{task_id}"):
@@ -144,6 +183,15 @@ def _compute_next_cron_fire(task: dict) -> datetime | None:
     hour = task.get("hour", 9)
     minute = task.get("minute", 0)
 
+    # End-date check: if the task has expired, never fire overdue
+    end_date_str = task.get("end_date", "")
+    if end_date_str:
+        try:
+            if date.fromisoformat(end_date_str) < date.today():
+                return None
+        except (ValueError, TypeError):
+            pass
+
     if t == "scheduled":
         dow = task["day_of_week"]  # 0=Mon
         today_dow = now.weekday()
@@ -154,19 +202,119 @@ def _compute_next_cron_fire(task: dict) -> datetime | None:
         # Rough check: if today is the right day but time hasn't passed yet, go back 7 days
         if last_fire > now:
             last_fire -= timedelta(days=7)
+        # Only fire overdue if the missed fire was today — skip past-day misses
+        if last_fire.date() != date.today():
+            return None
         # Don't fire overdue for tasks that haven't had their first occurrence yet.
         # If start_date is missing (old task), treat as created today — don't fire.
         start_date = task.get("start_date") or date.today().isoformat()
         if last_fire.date() < date.fromisoformat(start_date):
             return None
+        # Don't re-fire if already marked done on the same day as the last fire
+        last_done = task.get("last_done")
+        if last_done:
+            try:
+                if datetime.fromisoformat(last_done).date() >= last_fire.date():
+                    return None
+            except (ValueError, TypeError):
+                pass
         return last_fire
-    elif t in ("daily", "weekly", "quarterly"):
+    elif t == "daily":
         candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if candidate > now:
             candidate -= timedelta(days=1)
-        # Don't fire overdue if task was created today or start_date unknown
         start_date = task.get("start_date") or date.today().isoformat()
-        if candidate.date() <= date.fromisoformat(start_date):
+        if candidate.date() < date.fromisoformat(start_date):
             return None
+        last_done = task.get("last_done")
+        if last_done:
+            try:
+                if datetime.fromisoformat(last_done).date() >= candidate.date():
+                    return None
+            except (ValueError, TypeError):
+                pass
         return candidate
+
+    elif t == "weekly":
+        # Only fire overdue on the exact scheduled day of week
+        if now.weekday() != task.get("day_of_week", 0):
+            return None
+        candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate > now:
+            return None  # scheduled time hasn't come yet today
+        start_date = task.get("start_date") or date.today().isoformat()
+        if candidate.date() < date.fromisoformat(start_date):
+            return None
+        last_done = task.get("last_done")
+        if last_done:
+            try:
+                if datetime.fromisoformat(last_done).date() >= candidate.date():
+                    return None
+            except (ValueError, TypeError):
+                pass
+        return candidate
+
+    elif t == "monthly":
+        # Only fire overdue on the exact scheduled day of month
+        day_of_month = task.get("day_of_month", 1)
+        if now.day != day_of_month:
+            return None
+        candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate > now:
+            return None  # scheduled time hasn't come yet today
+        start_date = task.get("start_date") or date.today().isoformat()
+        if candidate.date() < date.fromisoformat(start_date):
+            return None
+        last_done = task.get("last_done")
+        if last_done:
+            try:
+                if datetime.fromisoformat(last_done).date() >= candidate.date():
+                    return None
+            except (ValueError, TypeError):
+                pass
+        return candidate
+
+    elif t == "quarterly":
+        # Only fire overdue if check-in is enabled and today is the check-in day
+        if not task.get("check_in_enabled", False):
+            return None
+        if now.weekday() != task.get("check_in_dow", 0):
+            return None
+        candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate > now:
+            return None
+        start_date = task.get("start_date") or date.today().isoformat()
+        if candidate.date() < date.fromisoformat(start_date):
+            return None
+        last_done = task.get("last_done")
+        if last_done:
+            try:
+                if datetime.fromisoformat(last_done).date() >= candidate.date():
+                    return None
+            except (ValueError, TypeError):
+                pass
+        return candidate
+
+    elif t == "one_time":
+        due_str = task.get("due_date")
+        if not due_str:
+            return None
+        try:
+            due_d = date.fromisoformat(due_str)
+            candidate = datetime(due_d.year, due_d.month, due_d.day, hour, minute)
+        except (ValueError, TypeError):
+            return None
+        if candidate > now:
+            return None
+        if candidate.date() != date.today():
+            return None
+        last_done = task.get("last_done")
+        if last_done:
+            try:
+                if datetime.fromisoformat(last_done).date() >= candidate.date():
+                    return None
+            except (ValueError, TypeError):
+                pass
+        return candidate
+
     return None

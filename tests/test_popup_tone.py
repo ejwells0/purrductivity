@@ -40,28 +40,26 @@ def test_get_tone_message_weekly_on_track():
 def test_get_tone_message_quarterly_behind():
     """Quarterly task behind schedule → result contains '😾' (harsh message)."""
     from ui.reminder_popup import _get_tone_message
-    # Q2 2026 start: date(2026,4,1), quarterly_expected_fraction ≈ 0.077 → expected% ≈ 7.7
-    # progress=5 → behind (5 < 7.7)
+    # Q2 2026 mid: May 16 → fraction≈0.506 → expected%≈50.6; progress=40 → behind
     task = {
         "type": "quarterly",
         "name": "Learn Piano",
-        "progress": 5,
+        "progress": 40,
     }
-    result = _get_tone_message(task, today=date(2026, 4, 1))
+    result = _get_tone_message(task, today=date(2026, 5, 16))
     assert "😾" in result, f"Expected '😾' in harsh message, got: {result!r}"
 
 
 def test_get_tone_message_quarterly_on_track():
     """Quarterly task on track → result contains '🐾' (friendly message)."""
     from ui.reminder_popup import _get_tone_message
-    # Q2 2026 start: date(2026,4,1), quarterly_expected_fraction ≈ 0.077 → expected% ≈ 7.7
-    # progress=95 → on track (95 >= 7.7)
+    # Q2 2026 mid: May 16 → fraction≈0.506 → expected%≈50.6; progress=60 → on track
     task = {
         "type": "quarterly",
         "name": "Learn Piano",
-        "progress": 95,
+        "progress": 60,
     }
-    result = _get_tone_message(task, today=date(2026, 4, 1))
+    result = _get_tone_message(task, today=date(2026, 5, 16))
     assert "🐾" in result, f"Expected '🐾' in friendly message, got: {result!r}"
 
 
