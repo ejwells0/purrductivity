@@ -1,4 +1,4 @@
-# Purrductivity 🐱
+# Purrductivity
 
 A cat-themed macOS menu-bar productivity app. Cats live in your menu bar, remind you about your tasks, and nag you (adorably) when you snooze them.
 
