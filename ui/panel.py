@@ -65,6 +65,20 @@ def _load_cat_image(size: int = 160) -> ctk.CTkImage:
     return ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
 
 
+def _pick_cats(n: int) -> list[str]:
+    """Pick n cat filenames by dealing from shuffled decks: every cat appears
+    once before any repeats, and no two adjacent picks are the same cat."""
+    picks: list[str] = []
+    while len(picks) < n:
+        deck = _CAT_FILES[:]
+        random.shuffle(deck)
+        # avoid identical neighbors across the reshuffle boundary
+        if picks and len(deck) > 1 and deck[0] == picks[-1]:
+            deck[0], deck[-1] = deck[-1], deck[0]
+        picks.extend(deck)
+    return picks[:n]
+
+
 def _draw_cats_on_canvas(canvas: tk.Canvas) -> None:
     """Clear and redraw a fresh random set of cats on the strip canvas."""
     canvas.delete("all")
@@ -72,10 +86,11 @@ def _draw_cats_on_canvas(canvas: tk.Canvas) -> None:
     y_offsets = [10,  4, 14,  6,  8,  2, 12,  5, 10,  4]
     step = cat_size + 2
     positions = list(range(-20, PANEL_WIDTH + cat_size, step))
+    cats = _pick_cats(len(positions))
     canvas._cat_photos = []
     for i, x in enumerate(positions):
         y = y_offsets[i % len(y_offsets)]
-        path = os.path.join(_CATS_DIR, random.choice(_CAT_FILES))
+        path = os.path.join(_CATS_DIR, cats[i])
         pil_img = Image.open(path).convert("RGBA").resize((cat_size, cat_size), Image.LANCZOS)
         photo = ImageTk.PhotoImage(pil_img)
         canvas._cat_photos.append(photo)
